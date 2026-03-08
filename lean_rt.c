@@ -572,7 +572,11 @@ lean_object *lean_mk_empty_array_with_capacity(lean_object *cap)
 lean_object *lean_array_push(lean_object *a, lean_object *v)
 {
     lean_array_object *arr = (lean_array_object *)a;
-    if (arr->m_size >= arr->m_capacity) {
+    if (!lean_is_exclusive(a)) {
+        /* Shared or persistent array — must copy to preserve value semantics */
+        a = lean_copy_expand_array(a, arr->m_size < arr->m_capacity ? 0 : 1);
+        arr = (lean_array_object *)a;
+    } else if (arr->m_size >= arr->m_capacity) {
         a = lean_copy_expand_array(a, 1);
         arr = (lean_array_object *)a;
     }
@@ -1358,4 +1362,53 @@ lean_object *lean_io_get_num_heartbeats(lean_object *w)
 {
     (void)w;
     return lean_io_result_mk_ok(lean_box(0));
+}
+
+/* ========================================================================
+ * Char.ofNat — used by generated code for Char.ofNat
+ * ======================================================================== */
+
+uint32_t l_Char_ofNat(lean_object *n)
+{
+    uint32_t v = 0;
+    if (lean_is_scalar(n))
+        v = (uint32_t)lean_unbox(n);
+    /* Validate Unicode scalar value */
+    if (v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF))
+        return 0;
+    return v;
+}
+
+/* ========================================================================
+ * Nat.reprFast — convert Nat to decimal string
+ * ======================================================================== */
+
+lean_object *l_Nat_reprFast(lean_object *n)
+{
+    if (lean_is_scalar(n)) {
+        size_t v = lean_unbox(n);
+        if (v == 0) return lean_mk_string("0");
+        char buf[24];
+        int pos = 23;
+        buf[pos] = '\0';
+        while (v > 0 && pos > 0) {
+            pos--;
+            buf[pos] = '0' + (char)(v % 10);
+            v /= 10;
+        }
+        return lean_mk_string(buf + pos);
+    }
+    return lean_mk_string("<bignat>");
+}
+
+/* ========================================================================
+ * RISC-V cycle counter
+ * ======================================================================== */
+
+lean_object *lean_cycles_now(lean_object *w)
+{
+    (void)w;
+    uint64_t c;
+    __asm__ volatile ("rdcycle %0" : "=r"(c));
+    return lean_io_result_mk_ok(lean_box_uint64(c));
 }

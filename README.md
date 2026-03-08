@@ -91,11 +91,46 @@ examples/       Lean source files
 ## Roadmap
 
 - [x] Phase 1: Hello World — `IO.println` working on bare-metal
+- [x] Phase 1.5: SHA-256 — real computation with cycle timing on bare-metal
 - [ ] Phase 2: Nat/Int bignum support (port `mpn.cpp` to C)
 - [ ] Phase 3: Slab allocator (real memory reuse)
 - [ ] Phase 4: Interrupts and basic hardware interaction
 - [ ] Phase 5: Real hardware (SiFive, StarFive, etc.)
 - [ ] Phase 6: Formally verified device drivers written in Lean
+
+## Industry roadmap
+
+### Near-term demos (weeks)
+
+1. **Verified state machine on real hardware (SiFive / StarFive RISC-V board)**
+   Port from QEMU to a $15 board. A Lean-proven-correct protocol parser (say, a CAN bus message decoder for automotive) running on actual silicon. The demo writes: "this code is mathematically proven correct and runs with zero dependencies on 64KB of RAM."
+
+2. **Verified cryptographic primitive**
+   Implement something like ChaCha20 or SHA-256 in Lean with a correctness proof, compile to bare-metal, benchmark it. Compares to: HACL* (F\*), Fiat-Crypto (Coq), but with Lean's better ergonomics. This is immediately publishable.
+
+### Medium-term (months)
+
+3. **Bare-metal Lean RTOS microkernel**
+   A minimal real-time scheduler — task switching, priority queues, timer interrupts — all in Lean with proofs about scheduling properties (no priority inversion, bounded latency). This is the seL4 story but with a language that's actually pleasant to write.
+
+4. **Verified sensor fusion / flight controller**
+   A Kalman filter or complementary filter with proven numerical stability bounds, running on bare-metal reading IMU data. This directly targets DO-178C (avionics) and would get attention from the aerospace formal methods community.
+
+5. **Verified bootloader**
+   A RISC-V bootloader that loads and verifies a signed kernel image. Proof that it never executes unsigned code. Small, self-contained, and directly useful for secure boot chains.
+
+### What we'd actually do first
+
+The cryptographic primitive (#2). Here's why:
+
+- **Smallest scope** — one pure function, no hardware interaction beyond what we already have
+- **Immediately benchmarkable** — "Lean-proven SHA-256 runs at X MB/s on bare-metal RISC-V"
+- **Existing competition to compare against** (HACL\*, Fiat-Crypto, Jasmin) — makes the story legible
+- **Publishable** as a paper or blog post
+- **Doesn't require Phase 2 (bignum) or Phase 3 (slab allocator)** — fixed-width integers only
+- **Proves both the runtime works AND that Lean's proof system composes with bare-metal execution**
+
+The pitch becomes: "We wrote SHA-256 in Lean, proved it correct against the spec, compiled it to C, ran it on bare-metal RISC-V with no OS, no libc, no runtime — and it's within 2x of hand-written C." That's a story people will share.
 
 ## Allocator roadmap: bump → slab
 

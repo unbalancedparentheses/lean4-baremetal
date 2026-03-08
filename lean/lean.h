@@ -12,6 +12,13 @@
 #include <stdbool.h>
 #include "../lean_rt.h"
 
+/* ---- Object tag accessor ---- */
+
+static inline uint8_t lean_obj_tag(lean_object *o) {
+    if (lean_is_scalar(o)) return (uint8_t)(lean_unbox(o) & 0xFF);
+    return o->m_tag;
+}
+
 /* ---- Compatibility macros ---- */
 
 /* The generated code may use these attributes */
@@ -239,5 +246,224 @@ static inline lean_object *initialize_Init(uint8_t builtin) {
     (void)builtin;
     return lean_io_result_mk_ok(lean_box(0));
 }
+
+/* ---- Array access functions (used by generated code) ---- */
+
+/* Unchecked access by USize index */
+static inline lean_object *lean_array_uget(lean_object *a, size_t i) {
+    lean_object *r = lean_array_get_core(a, i);
+    lean_inc(r);
+    return r;
+}
+
+static inline lean_object *lean_array_uset(lean_object *a, size_t i, lean_object *v) {
+    if (lean_is_exclusive(a)) {
+        lean_dec(lean_array_cptr(a)[i]);
+        lean_array_set_core(a, i, v);
+        return a;
+    }
+    lean_array_object *ao = (lean_array_object *)a;
+    size_t sz = ao->m_size;
+    lean_object *r = lean_mk_empty_array_with_capacity(lean_box(sz));
+    for (size_t j = 0; j < sz; j++) {
+        lean_object *elem = lean_array_get_core(a, j);
+        lean_inc(elem);
+        r = lean_array_push(r, elem);
+    }
+    lean_dec(lean_array_cptr(r)[i]);
+    lean_array_set_core(r, i, v);
+    lean_dec(a);
+    return r;
+}
+
+/* Fin-indexed access (index is a Lean Nat object) */
+static inline lean_object *lean_array_fget(lean_object *a, lean_object *i) {
+    size_t idx = lean_unbox(i);
+    lean_object *r = lean_array_get_core(a, idx);
+    lean_inc(r);
+    return r;
+}
+
+/* Fin-indexed borrowed access (no inc on the result, used for read-only access) */
+static inline lean_object *lean_array_fget_borrowed(lean_object *a, lean_object *i) {
+    size_t idx = lean_unbox(i);
+    return lean_array_get_core(a, idx);
+}
+
+static inline lean_object *lean_array_fset(lean_object *a, lean_object *i, lean_object *v) {
+    size_t idx = lean_unbox(i);
+    if (lean_is_exclusive(a)) {
+        lean_dec(lean_array_cptr(a)[idx]);
+        lean_array_set_core(a, idx, v);
+        return a;
+    }
+    lean_array_object *ao = (lean_array_object *)a;
+    size_t sz = ao->m_size;
+    lean_object *r = lean_mk_empty_array_with_capacity(lean_box(sz));
+    for (size_t j = 0; j < sz; j++) {
+        lean_object *elem = lean_array_get_core(a, j);
+        lean_inc(elem);
+        r = lean_array_push(r, elem);
+    }
+    lean_dec(lean_array_cptr(r)[idx]);
+    lean_array_set_core(r, idx, v);
+    lean_dec(a);
+    return r;
+}
+
+/* Bounds-checked access with default value */
+static inline lean_object *lean_array_get(lean_object *def, lean_object *a, lean_object *i) {
+    size_t idx = lean_is_scalar(i) ? lean_unbox(i) : (size_t)-1;
+    if (idx < lean_array_size(a)) {
+        lean_object *r = lean_array_get_core(a, idx);
+        lean_inc(r);
+        lean_dec(def);
+        return r;
+    }
+    return def;
+}
+
+static inline lean_object *lean_array_set(lean_object *a, lean_object *i, lean_object *v) {
+    size_t idx = lean_is_scalar(i) ? lean_unbox(i) : (size_t)-1;
+    if (idx < lean_array_size(a)) {
+        if (lean_is_exclusive(a)) {
+            lean_dec(lean_array_cptr(a)[idx]);
+            lean_array_set_core(a, idx, v);
+            return a;
+        }
+        lean_array_object *ao = (lean_array_object *)a;
+        size_t sz = ao->m_size;
+        lean_object *r = lean_mk_empty_array_with_capacity(lean_box(sz));
+        for (size_t j = 0; j < sz; j++) {
+            lean_object *elem = lean_array_get_core(a, j);
+            lean_inc(elem);
+            r = lean_array_push(r, elem);
+        }
+        lean_dec(lean_array_cptr(r)[idx]);
+        lean_array_set_core(r, idx, v);
+        lean_dec(a);
+        return r;
+    }
+    lean_dec(v);
+    return a;
+}
+
+/* Array size as a Lean Nat */
+static inline lean_object *lean_array_get_size(lean_object *a) {
+    return lean_box(lean_array_size(a));
+}
+
+/* ---- UInt32 arithmetic (used by SHA-256 generated code) ---- */
+
+static inline uint32_t lean_uint32_add(uint32_t a, uint32_t b) { return a + b; }
+static inline uint32_t lean_uint32_sub(uint32_t a, uint32_t b) { return a - b; }
+static inline uint32_t lean_uint32_mul(uint32_t a, uint32_t b) { return a * b; }
+static inline uint32_t lean_uint32_div(uint32_t a, uint32_t b) { return b == 0 ? 0 : a / b; }
+static inline uint32_t lean_uint32_mod(uint32_t a, uint32_t b) { return b == 0 ? a : a % b; }
+static inline uint32_t lean_uint32_land(uint32_t a, uint32_t b) { return a & b; }
+static inline uint32_t lean_uint32_lor(uint32_t a, uint32_t b) { return a | b; }
+static inline uint32_t lean_uint32_xor(uint32_t a, uint32_t b) { return a ^ b; }
+static inline uint32_t lean_uint32_complement(uint32_t a) { return ~a; }
+static inline uint32_t lean_uint32_shift_left(uint32_t a, uint32_t b) { return a << (b & 31); }
+static inline uint32_t lean_uint32_shift_right(uint32_t a, uint32_t b) { return a >> (b & 31); }
+static inline uint8_t lean_uint32_dec_eq(uint32_t a, uint32_t b) { return a == b; }
+static inline uint8_t lean_uint32_dec_lt(uint32_t a, uint32_t b) { return a < b; }
+static inline uint8_t lean_uint32_dec_le(uint32_t a, uint32_t b) { return a <= b; }
+static inline uint32_t lean_uint32_of_nat(lean_object *a) {
+    if (lean_is_scalar(a)) return (uint32_t)lean_unbox(a);
+    return 0;
+}
+static inline lean_object *lean_uint32_to_nat(uint32_t n) {
+    return lean_box((size_t)n);
+}
+
+/* ---- UInt8 arithmetic ---- */
+
+static inline uint8_t lean_uint8_add(uint8_t a, uint8_t b) { return a + b; }
+static inline uint8_t lean_uint8_sub(uint8_t a, uint8_t b) { return a - b; }
+static inline uint8_t lean_uint8_mul(uint8_t a, uint8_t b) { return a * b; }
+static inline uint8_t lean_uint8_land(uint8_t a, uint8_t b) { return a & b; }
+static inline uint8_t lean_uint8_lor(uint8_t a, uint8_t b) { return a | b; }
+static inline uint8_t lean_uint8_xor(uint8_t a, uint8_t b) { return a ^ b; }
+static inline uint8_t lean_uint8_shift_left(uint8_t a, uint8_t b) { return a << (b & 7); }
+static inline uint8_t lean_uint8_shift_right(uint8_t a, uint8_t b) { return a >> (b & 7); }
+static inline uint8_t lean_uint8_complement(uint8_t a) { return ~a; }
+static inline uint8_t lean_uint8_dec_eq(uint8_t a, uint8_t b) { return a == b; }
+static inline uint8_t lean_uint8_dec_lt(uint8_t a, uint8_t b) { return a < b; }
+static inline uint8_t lean_uint8_dec_le(uint8_t a, uint8_t b) { return a <= b; }
+static inline uint8_t lean_uint8_of_nat(lean_object *a) {
+    if (lean_is_scalar(a)) return (uint8_t)lean_unbox(a);
+    return 0;
+}
+static inline lean_object *lean_uint8_to_nat(uint8_t n) {
+    return lean_box((size_t)n);
+}
+static inline uint32_t lean_uint8_to_uint32(uint8_t a) { return (uint32_t)a; }
+static inline uint8_t lean_uint32_to_uint8(uint32_t a) { return (uint8_t)a; }
+
+/* ---- UInt64 arithmetic ---- */
+
+static inline uint64_t lean_uint64_add(uint64_t a, uint64_t b) { return a + b; }
+static inline uint64_t lean_uint64_sub(uint64_t a, uint64_t b) { return a - b; }
+static inline uint64_t lean_uint64_mul(uint64_t a, uint64_t b) { return a * b; }
+static inline uint64_t lean_uint64_div(uint64_t a, uint64_t b) { return b == 0 ? 0 : a / b; }
+static inline uint64_t lean_uint64_mod(uint64_t a, uint64_t b) { return b == 0 ? a : a % b; }
+static inline uint64_t lean_uint64_land(uint64_t a, uint64_t b) { return a & b; }
+static inline uint64_t lean_uint64_lor(uint64_t a, uint64_t b) { return a | b; }
+static inline uint64_t lean_uint64_xor(uint64_t a, uint64_t b) { return a ^ b; }
+static inline uint64_t lean_uint64_complement(uint64_t a) { return ~a; }
+static inline uint64_t lean_uint64_shift_left(uint64_t a, uint64_t b) { return a << (b & 63); }
+static inline uint64_t lean_uint64_shift_right(uint64_t a, uint64_t b) { return a >> (b & 63); }
+static inline uint8_t lean_uint64_dec_eq(uint64_t a, uint64_t b) { return a == b; }
+static inline uint8_t lean_uint64_dec_lt(uint64_t a, uint64_t b) { return a < b; }
+static inline uint8_t lean_uint64_dec_le(uint64_t a, uint64_t b) { return a <= b; }
+static inline uint64_t lean_uint64_of_nat(lean_object *a) {
+    if (lean_is_scalar(a)) return (uint64_t)lean_unbox(a);
+    return 0;
+}
+static inline lean_object *lean_uint64_to_nat(uint64_t n) {
+    return lean_box((size_t)n);
+}
+static inline uint8_t lean_uint64_to_uint8(uint64_t a) { return (uint8_t)a; }
+
+/* ---- USize arithmetic ---- */
+
+static inline size_t lean_usize_add(size_t a, size_t b) { return a + b; }
+static inline size_t lean_usize_sub(size_t a, size_t b) { return a - b; }
+static inline size_t lean_usize_mul(size_t a, size_t b) { return a * b; }
+static inline size_t lean_usize_land(size_t a, size_t b) { return a & b; }
+static inline size_t lean_usize_lor(size_t a, size_t b) { return a | b; }
+static inline size_t lean_usize_shift_left(size_t a, size_t b) { return a << b; }
+static inline size_t lean_usize_shift_right(size_t a, size_t b) { return a >> b; }
+static inline uint8_t lean_usize_dec_eq(size_t a, size_t b) { return a == b; }
+static inline uint8_t lean_usize_dec_lt(size_t a, size_t b) { return a < b; }
+static inline uint8_t lean_usize_dec_le(size_t a, size_t b) { return a <= b; }
+static inline size_t lean_usize_of_nat(lean_object *a) {
+    if (lean_is_scalar(a)) return lean_unbox(a);
+    return 0;
+}
+static inline lean_object *lean_usize_to_nat(size_t n) {
+    return lean_box(n);
+}
+
+/* ---- Nat shift right (used by UInt conversions) ---- */
+
+static inline lean_object *lean_nat_shiftr(lean_object *a, lean_object *b) {
+    if (lean_is_scalar(a) && lean_is_scalar(b))
+        return lean_box(lean_unbox(a) >> lean_unbox(b));
+    return lean_box(0);
+}
+
+/* ---- Char operations ---- */
+
+static inline uint32_t lean_char_of_nat(lean_object *n) {
+    uint32_t v = (uint32_t)(lean_is_scalar(n) ? lean_unbox(n) : 0);
+    /* Validate Unicode scalar value */
+    if (v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF)) return 0;
+    return v;
+}
+
+static inline uint8_t lean_char_dec_eq(uint32_t a, uint32_t b) { return a == b; }
+static inline uint8_t lean_char_dec_lt(uint32_t a, uint32_t b) { return a < b; }
 
 #endif /* LEAN_LEAN_H */

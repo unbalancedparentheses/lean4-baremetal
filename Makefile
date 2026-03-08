@@ -1,9 +1,14 @@
 # Makefile — Build system for lean4-baremetal
 #
 # Pipeline:
-#   1. lean examples/hello.lean -c build/hello.c    (Lean → C)
-#   2. riscv64 cross-compile all C + assembly        (C → ELF)
-#   3. qemu-system-riscv64 runs the binary           (ELF → bare-metal)
+#   1. lean examples/$(EXAMPLE).lean -c build/$(EXAMPLE).c    (Lean → C)
+#   2. riscv64 cross-compile all C + assembly                  (C → ELF)
+#   3. qemu-system-riscv64 runs the binary                     (ELF → bare-metal)
+#
+# Usage:
+#   make                       # build hello example (default)
+#   make EXAMPLE=sha256        # build sha256 example
+#   make EXAMPLE=sha256 run    # build and run sha256 on QEMU
 
 # Tools
 LEAN      ?= lean
@@ -30,9 +35,12 @@ QEMUFLAGS := -machine virt -bios none -nographic -serial mon:stdio
 # Directories
 BUILDDIR  := build
 
+# Example selection (override with: make EXAMPLE=sha256)
+EXAMPLE   ?= hello
+
 # Sources
-LEAN_SRC  := examples/hello.lean
-LEAN_C    := $(BUILDDIR)/hello.c
+LEAN_SRC  := examples/$(EXAMPLE).lean
+LEAN_C    := $(BUILDDIR)/$(EXAMPLE).c
 
 ASM_SRC   := boot.S
 C_SRCS    := lean_rt.c uart.c libc_min.c
@@ -40,7 +48,7 @@ C_SRCS    := lean_rt.c uart.c libc_min.c
 # Object files
 ASM_OBJ   := $(BUILDDIR)/boot.o
 C_OBJS    := $(patsubst %.c,$(BUILDDIR)/%.o,$(C_SRCS))
-LEAN_OBJ  := $(BUILDDIR)/hello_lean.o
+LEAN_OBJ  := $(BUILDDIR)/$(EXAMPLE)_lean.o
 
 ALL_OBJS  := $(ASM_OBJ) $(C_OBJS) $(LEAN_OBJ)
 
@@ -48,7 +56,7 @@ ALL_OBJS  := $(ASM_OBJ) $(C_OBJS) $(LEAN_OBJ)
 KERNEL    := $(BUILDDIR)/kernel.elf
 
 
-.PHONY: all clean run lean-c objdump nix-build nix-run nix-clean
+.PHONY: all clean run lean-c objdump verify nix-build nix-run nix-clean nix-verify
 
 # Nix wrappers — run everything inside nix develop, no manual shell needed
 NIX := nix --extra-experimental-features 'nix-command flakes'
@@ -61,6 +69,9 @@ nix-run:
 
 nix-clean:
 	$(NIX) develop --command make clean
+
+nix-verify:
+	$(NIX) develop --command make verify
 
 all: $(KERNEL)
 
@@ -104,6 +115,11 @@ objdump: $(KERNEL)
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
+
+# Formal verification: typecheck proof file (if lean accepts it, all proofs are valid)
+verify:
+	@echo "  VERIFY  examples/sha256_proof.lean"
+	$(LEAN) examples/sha256_proof.lean
 
 clean:
 	rm -rf $(BUILDDIR)
