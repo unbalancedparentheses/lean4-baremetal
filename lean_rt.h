@@ -395,17 +395,17 @@ void lean_internal_panic_out_of_memory(void) __attribute__((noreturn));
 void lean_internal_panic_rc_overflow(void) __attribute__((noreturn));
 
 /* Initialization */
-lean_object *lean_initialize_runtime_module(void);
+void lean_initialize_runtime_module(void);
 void lean_io_mark_end_initialization(void);
-void lean_setup_args(int argc, char **argv);
+char **lean_setup_args(int argc, char **argv);
 void lean_set_panic_messages(uint8_t flag);
-lean_object *lean_init_task_manager(void);
-lean_object *lean_finalize_task_manager(void);
+void lean_init_task_manager(void);
+void lean_finalize_task_manager(void);
 
 /* IO */
-lean_object *lean_get_stdout(lean_object *w);
-lean_object *lean_get_stderr(lean_object *w);
-lean_object *lean_get_stdin(lean_object *w);
+lean_object *lean_get_stdout(void);
+lean_object *lean_get_stderr(void);
+lean_object *lean_get_stdin(void);
 lean_object *lean_io_prim_handle_put_str(lean_object *h, lean_object *s, lean_object *w);
 lean_object *lean_io_prim_put_str(lean_object *s, lean_object *w);
 lean_object *lean_io_result_show_error(lean_object *r);

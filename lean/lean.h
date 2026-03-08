@@ -9,6 +9,7 @@
 #ifndef LEAN_LEAN_H
 #define LEAN_LEAN_H
 
+#include <stdbool.h>
 #include "../lean_rt.h"
 
 /* ---- Compatibility macros ---- */
@@ -231,5 +232,12 @@ static inline uint8_t lean_io_initializing(void) {
 
 /* Interrupt checking — no-op on bare-metal */
 static inline void lean_check_system(void) {}
+
+/* Initialize the Init library — stub for bare-metal.
+ * The generated code calls this to init all of Lean's Init module. */
+static inline lean_object *initialize_Init(uint8_t builtin) {
+    (void)builtin;
+    return lean_io_result_mk_ok(lean_box(0));
+}
 
 #endif /* LEAN_LEAN_H */

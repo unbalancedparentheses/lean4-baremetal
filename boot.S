@@ -29,7 +29,11 @@ _start:
     # Set up stack pointer (stack grows downward)
     la      sp, _stack_top
 
-    # Call C main
+    # Set argc=0, argv=NULL for C main(int argc, char **argv)
+    li      a0, 0
+    li      a1, 0
+
+    # Call C main (provided by Lean-generated code)
     call    main
 
     # If main returns, halt

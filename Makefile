@@ -7,16 +7,15 @@
 
 # Tools
 LEAN      ?= lean
-CC        ?= riscv64-elf-gcc
-OBJCOPY   ?= riscv64-elf-objcopy
-OBJDUMP   ?= riscv64-elf-objdump
 QEMU      ?= qemu-system-riscv64
 
-# If riscv64-elf-gcc is not found, try riscv64-unknown-elf-gcc or
-# riscv64-linux-gnu-gcc (Nix often provides riscv64-none-elf-gcc)
-CC_ALT1   := riscv64-unknown-elf-gcc
-CC_ALT2   := riscv64-none-elf-gcc
-CC_ALT3   := riscv64-linux-gnu-gcc
+# Cross-compiler: detect riscv64 gcc variant (nix sets CC=clang, so we
+# must explicitly search for the cross-compiler by name)
+CROSS_CC  := $(shell command -v riscv64-unknown-linux-gnu-gcc 2>/dev/null || \
+                     command -v riscv64-elf-gcc 2>/dev/null || \
+                     command -v riscv64-unknown-elf-gcc 2>/dev/null || \
+                     command -v riscv64-none-elf-gcc 2>/dev/null || \
+                     command -v riscv64-linux-gnu-gcc 2>/dev/null)
 
 # Flags
 CFLAGS    := -ffreestanding -nostdlib -nostartfiles \
@@ -36,7 +35,7 @@ LEAN_SRC  := examples/hello.lean
 LEAN_C    := $(BUILDDIR)/hello.c
 
 ASM_SRC   := boot.S
-C_SRCS    := lean_rt.c uart.c libc_min.c main.c
+C_SRCS    := lean_rt.c uart.c libc_min.c
 
 # Object files
 ASM_OBJ   := $(BUILDDIR)/boot.o
@@ -48,11 +47,6 @@ ALL_OBJS  := $(ASM_OBJ) $(C_OBJS) $(LEAN_OBJ)
 # Output
 KERNEL    := $(BUILDDIR)/kernel.elf
 
-# Detect which cross-compiler is available
-REAL_CC := $(shell command -v $(CC) 2>/dev/null || \
-                   command -v $(CC_ALT1) 2>/dev/null || \
-                   command -v $(CC_ALT2) 2>/dev/null || \
-                   command -v $(CC_ALT3) 2>/dev/null)
 
 .PHONY: all clean run lean-c objdump nix-build nix-run nix-clean
 
@@ -80,22 +74,22 @@ $(LEAN_C): $(LEAN_SRC) | $(BUILDDIR)
 # Step 2: Compile assembly
 $(ASM_OBJ): $(ASM_SRC) | $(BUILDDIR)
 	@echo "  AS      $<"
-	$(REAL_CC) $(CFLAGS) -c $< -o $@
+	$(CROSS_CC) $(CFLAGS) -c $< -o $@
 
 # Step 3: Compile C sources
 $(BUILDDIR)/%.o: %.c lean_rt.h uart.h | $(BUILDDIR)
 	@echo "  CC      $<"
-	$(REAL_CC) $(CFLAGS) -c $< -o $@
+	$(CROSS_CC) $(CFLAGS) -c $< -o $@
 
 # Step 4: Compile Lean-generated C (needs special include handling)
 $(LEAN_OBJ): $(LEAN_C) lean_rt.h | $(BUILDDIR)
 	@echo "  CC      $< (lean-generated)"
-	$(REAL_CC) $(CFLAGS) -Wno-unused-function -Wno-missing-field-initializers -c $< -o $@
+	$(CROSS_CC) $(CFLAGS) -Wno-unused-function -Wno-missing-field-initializers -c $< -o $@
 
 # Step 5: Link
 $(KERNEL): $(ALL_OBJS)
 	@echo "  LD      $@"
-	$(REAL_CC) $(LDFLAGS) $(ALL_OBJS) -o $@
+	$(CROSS_CC) $(LDFLAGS) $(ALL_OBJS) -o $@
 	@echo "  Built $(KERNEL) ($(shell stat -f%z $@ 2>/dev/null || stat -c%s $@) bytes)"
 
 # Run on QEMU
@@ -106,7 +100,7 @@ run: $(KERNEL)
 
 # Useful for debugging
 objdump: $(KERNEL)
-	$(REAL_CC:gcc=objdump) -d $(KERNEL) | head -100
+	$(subst gcc,objdump,$(CROSS_CC)) -d $(KERNEL) | head -100
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)

@@ -658,8 +658,11 @@ lean_object *lean_box_usize(size_t v)
 
 lean_object *lean_box_float(double v)
 {
-    lean_object *o = lean_alloc_ctor(0, 0, sizeof(double));
-    lean_ctor_set_float(o, 0, v);
+    /* Store raw bits to avoid soft-float codegen */
+    lean_object *o = lean_alloc_ctor(0, 0, sizeof(uint64_t));
+    uint64_t bits;
+    __builtin_memcpy(&bits, &v, sizeof(bits));
+    lean_ctor_set_uint64(o, 0, bits);
     return o;
 }
 
@@ -680,7 +683,10 @@ size_t lean_unbox_usize(lean_object *o)
 
 double lean_unbox_float(lean_object *o)
 {
-    return lean_ctor_get_float(o, 0);
+    uint64_t bits = lean_ctor_get_uint64(o, 0);
+    double v;
+    __builtin_memcpy(&v, &bits, sizeof(v));
+    return v;
 }
 
 lean_object *lean_unsigned_to_nat(size_t n)
@@ -881,30 +887,97 @@ void lean_internal_panic_rc_overflow(void)
  * IO
  * ======================================================================== */
 
-/* Singleton handle objects for stdin/stdout/stderr */
-static lean_object stdout_handle_obj;
-static lean_object stderr_handle_obj;
-static lean_object stdin_handle_obj;
+/*
+ * IO.FS.Stream is a Lean structure compiled as a constructor with 5 fields:
+ *   field 0: flush  (World → IO Unit)
+ *   field 1: read   (USize → World → IO ByteArray)
+ *   field 2: write  (ByteArray → World → IO USize)
+ *   field 3: getLine (World → IO String)
+ *   field 4: putStr (String → World → IO Unit)
+ *
+ * lean_get_stdout() returns a persistent Stream object.
+ */
 
-lean_object *lean_get_stdout(lean_object *w)
-{
+static lean_object *stream_flush_impl(lean_object *w) {
     (void)w;
-    lean_object *r = lean_io_result_mk_ok(&stdout_handle_obj);
-    return r;
+    return lean_io_result_mk_ok(lean_box(0));
 }
 
-lean_object *lean_get_stderr(lean_object *w)
-{
-    (void)w;
-    lean_object *r = lean_io_result_mk_ok(&stderr_handle_obj);
-    return r;
+static lean_object *stream_read_impl(lean_object *n, lean_object *w) {
+    (void)n; (void)w;
+    /* Return empty byte array stub */
+    return lean_io_result_mk_ok(lean_box(0));
 }
 
-lean_object *lean_get_stdin(lean_object *w)
-{
+static lean_object *stream_write_impl(lean_object *data, lean_object *w) {
+    (void)data; (void)w;
+    lean_dec(data);
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+static lean_object *stream_getline_impl(lean_object *w) {
     (void)w;
-    lean_object *r = lean_io_result_mk_ok(&stdin_handle_obj);
-    return r;
+    return lean_io_result_mk_ok(lean_mk_string(""));
+}
+
+static lean_object *stream_putstr_impl(lean_object *s, lean_object *w) {
+    (void)w;
+    if (!lean_is_scalar(s) && s->m_tag == LeanString) {
+        uart_puts(lean_string_cstr(s));
+    }
+    lean_dec(s);
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+static lean_object *stdout_stream = (lean_object *)0;
+static lean_object *stderr_stream = (lean_object *)0;
+static lean_object *stdin_stream = (lean_object *)0;
+
+static lean_object *make_stream(
+    lean_object *(*flush_fn)(lean_object *),
+    lean_object *(*read_fn)(lean_object *, lean_object *),
+    lean_object *(*write_fn)(lean_object *, lean_object *),
+    lean_object *(*getline_fn)(lean_object *),
+    lean_object *(*putstr_fn)(lean_object *, lean_object *))
+{
+    lean_object *stream = lean_alloc_ctor(0, 5, 0);
+    lean_ctor_set(stream, 0, lean_alloc_closure((lean_cfun)flush_fn, 1, 0));
+    lean_ctor_set(stream, 1, lean_alloc_closure((lean_cfun)read_fn, 2, 0));
+    lean_ctor_set(stream, 2, lean_alloc_closure((lean_cfun)write_fn, 2, 0));
+    lean_ctor_set(stream, 3, lean_alloc_closure((lean_cfun)getline_fn, 1, 0));
+    lean_ctor_set(stream, 4, lean_alloc_closure((lean_cfun)putstr_fn, 2, 0));
+    lean_mark_persistent(stream);
+    return stream;
+}
+
+lean_object *lean_get_stdout(void)
+{
+    if (!stdout_stream)
+        stdout_stream = make_stream(stream_flush_impl, stream_read_impl,
+                                    stream_write_impl, stream_getline_impl,
+                                    stream_putstr_impl);
+    lean_inc(stdout_stream);
+    return stdout_stream;
+}
+
+lean_object *lean_get_stderr(void)
+{
+    if (!stderr_stream)
+        stderr_stream = make_stream(stream_flush_impl, stream_read_impl,
+                                    stream_write_impl, stream_getline_impl,
+                                    stream_putstr_impl);
+    lean_inc(stderr_stream);
+    return stderr_stream;
+}
+
+lean_object *lean_get_stdin(void)
+{
+    if (!stdin_stream)
+        stdin_stream = make_stream(stream_flush_impl, stream_read_impl,
+                                   stream_write_impl, stream_getline_impl,
+                                   stream_putstr_impl);
+    lean_inc(stdin_stream);
+    return stdin_stream;
 }
 
 lean_object *lean_io_prim_handle_put_str(lean_object *h, lean_object *s, lean_object *w)
@@ -920,7 +993,12 @@ lean_object *lean_io_prim_handle_put_str(lean_object *h, lean_object *s, lean_ob
 
 lean_object *lean_io_prim_put_str(lean_object *s, lean_object *w)
 {
-    return lean_io_prim_handle_put_str(&stdout_handle_obj, s, w);
+    (void)w;
+    if (!lean_is_scalar(s) && s->m_tag == LeanString) {
+        uart_puts(lean_string_cstr(s));
+    }
+    lean_dec(s);
+    return lean_io_result_mk_ok(lean_box(0));
 }
 
 lean_object *lean_io_result_show_error(lean_object *r)
@@ -952,27 +1030,10 @@ lean_object *lean_io_prim_handle_get_line(lean_object *h, lean_object *w)
 
 static uint8_t g_panic_messages = 1;
 
-lean_object *lean_initialize_runtime_module(void)
+void lean_initialize_runtime_module(void)
 {
+    uart_init();
     heap_init();
-
-    /* Initialize IO handle singletons as persistent external objects */
-    stdout_handle_obj.m_rc = LEAN_RC_PERSISTENT;
-    stdout_handle_obj.m_tag = LeanExternal;
-    stdout_handle_obj.m_other = 0;
-    stdout_handle_obj.m_cs_sz = 0;
-
-    stderr_handle_obj.m_rc = LEAN_RC_PERSISTENT;
-    stderr_handle_obj.m_tag = LeanExternal;
-    stderr_handle_obj.m_other = 0;
-    stderr_handle_obj.m_cs_sz = 0;
-
-    stdin_handle_obj.m_rc = LEAN_RC_PERSISTENT;
-    stdin_handle_obj.m_tag = LeanExternal;
-    stdin_handle_obj.m_other = 0;
-    stdin_handle_obj.m_cs_sz = 0;
-
-    return lean_io_result_mk_ok(lean_box(0));
 }
 
 void lean_io_mark_end_initialization(void)
@@ -980,11 +1041,11 @@ void lean_io_mark_end_initialization(void)
     /* Nothing to do in single-threaded mode */
 }
 
-void lean_setup_args(int argc, char **argv)
+char **lean_setup_args(int argc, char **argv)
 {
     /* No command-line args on bare-metal */
     (void)argc;
-    (void)argv;
+    return argv;
 }
 
 void lean_set_panic_messages(uint8_t flag)
@@ -992,14 +1053,14 @@ void lean_set_panic_messages(uint8_t flag)
     g_panic_messages = flag;
 }
 
-lean_object *lean_init_task_manager(void)
+void lean_init_task_manager(void)
 {
-    return lean_io_result_mk_ok(lean_box(0));
+    /* No threading on bare-metal */
 }
 
-lean_object *lean_finalize_task_manager(void)
+void lean_finalize_task_manager(void)
 {
-    return lean_io_result_mk_ok(lean_box(0));
+    /* No threading on bare-metal */
 }
 
 /* ========================================================================
@@ -1173,44 +1234,10 @@ lean_object *lean_thunk_get_own(lean_object *t)
 
 lean_object *lean_float_to_string(double d)
 {
-    /* Very basic float-to-string: integer part only for now */
-    char buf[64];
-    int pos = 0;
-
-    if (d < 0) {
-        buf[pos++] = '-';
-        d = -d;
-    }
-
-    /* Integer part */
-    uint64_t ipart = (uint64_t)d;
-    double fpart = d - (double)ipart;
-
-    /* Convert integer part */
-    char ibuf[20];
-    int ilen = 0;
-    if (ipart == 0) {
-        ibuf[ilen++] = '0';
-    } else {
-        while (ipart > 0) {
-            ibuf[ilen++] = '0' + (char)(ipart % 10);
-            ipart /= 10;
-        }
-    }
-    for (int i = ilen - 1; i >= 0; i--)
-        buf[pos++] = ibuf[i];
-
-    /* Decimal part (6 digits) */
-    buf[pos++] = '.';
-    for (int i = 0; i < 6; i++) {
-        fpart *= 10.0;
-        int digit = (int)fpart;
-        buf[pos++] = '0' + (char)digit;
-        fpart -= digit;
-    }
-    buf[pos] = '\0';
-
-    return lean_mk_string(buf);
+    /* Stub — float-to-string requires soft-float libgcc on rv64imac.
+     * Will implement properly when targeting rv64gc or linking libgcc. */
+    (void)d;
+    return lean_mk_string("<float>");
 }
 
 /* ========================================================================
