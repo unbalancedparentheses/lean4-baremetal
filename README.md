@@ -70,13 +70,12 @@ examples/
 
 What's proven:
 - **Bitwise operations** match FIPS 180-4 spec — universal over all 32-bit inputs (`bv_decide`)
-- **Test vectors** — SHA-256("abc") and SHA-256("") produce correct digests at compile time (`native_decide`)
+- **Test vectors** — SHA-256("abc"), SHA-256(""), and the 56-byte two-block FIPS B.2 vector verified at compile time (`native_decide`)
+- **Structural properties (universal)** — `sha256` always returns 8 elements, `messageSchedule` returns 64, `padMsg` output is a multiple of 64 bytes, `compress` preserves array length 8 — all proven for ALL inputs
 - **Algebraic properties** — XOR commutativity/associativity, AND/OR commutativity
 
 What's not yet proven:
-- Correctness for all inputs (not just test vectors)
-- `padMsg` follows FIPS 180-4 padding spec
-- Structural properties (e.g. `compress` preserves array length 8)
+- Full functional correctness for all inputs (requires complete FIPS 180-4 reference spec — comparable in scope to HACL*/Fiat-Crypto)
 
 ## Slab allocator
 
@@ -112,3 +111,47 @@ What's not yet proven:
 ## Target
 
 RISC-V 64-bit on QEMU `virt` machine. Open ISA, excellent QEMU support. All tools provided by `nix develop`.
+
+## Project Ideas
+
+Here are some projects that leverage the "verified + bare metal" combination:
+
+### Verified Bootloader + Secure Boot Chain 🔐
+A RISC-V bootloader that loads and verifies kernel images, with proofs that it never executes unsigned code and correctly validates signatures (Ed25519). **Why**: Bootloaders are the root of trust—bugs here compromise everything above.
+
+### Deterministic CAN Bus Protocol Parser 🚗
+A verified parser for automotive CAN bus messages running on real hardware (e.g., StarFive VisionFive 2). Prove the parser is total (never crashes), handles framing correctly, and has no integer overflows. **Why**: Automotive ECUs often have parser bugs that cause safety issues.
+
+### Minimal Verified RTOS Microkernel ⏱️
+Task scheduler + priority queue with proofs of no priority inversion and bounded latency. The kernel itself is written in Lean and proven correct. **Why**: seL4 proved this is possible in C—Lean could make it more ergonomic.
+
+### Constant-Time Cryptographic Primitives 🔑
+ChaCha20, AES-GCM, or HMAC-SHA256 with functional correctness proofs AND constant-time proofs (no timing side channels). **Why**: Traditional C crypto is riddled with timing attacks.
+
+### Sensor Fusion with Numerical Bounds 🛩️
+Kalman filter for IMU data on a drone controller. Proofs: numerical stability (no NaN), quaternion normalization stays valid, angle estimates stay bounded. **Why**: Flight controllers need guarantees about numerical behavior.
+
+### Memory-Safe DMA Driver 🚀
+Direct Memory Access driver with proofs that transfers never overlap kernel memory, buffer bounds are respected, and no use-after-free occurs. **Why**: DMA bugs corrupt memory silently and are notoriously hard to debug.
+
+### Verified Space Protocol Parser 🛰️
+CCSDS packet parser for spacecraft communication. Prove no packet can cause out-of-bounds access. **Why**: Spacecraft software can't be patched—verification matters.
+
+---
+
+### 🌟 Recommended First Project
+
+**Verified Protocol Parser for a Hardware Bus (I2C/SPI/CAN)**
+
+**Why this first:**
+- Fits current constraints (no bignums needed, single-threaded is fine)
+- Can run on real $15 hardware (StarFive VisionFive 2)
+- Solves a real, common problem (parser bugs are frequent in embedded)
+- Clear success criteria: parse correctly + proofs of totality + no overflows
+- Good showcase for the "same code for proof and runtime" approach
+
+**Example target**: Parse MPU-6050/9250 IMU data over I2C with proofs that:
+1. Parser terminates on any input (totality)
+2. No out-of-bounds array access
+3. Checksum validation is correct
+4. Sensor values are within physically possible ranges

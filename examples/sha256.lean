@@ -96,14 +96,15 @@ def compress (hash : Array UInt32) (w : Array UInt32) : Array UInt32 :=
     getU32 hash 4 + st.e, getU32 hash 5 + st.f,
     getU32 hash 6 + st.g, getU32 hash 7 + st.h]
 
+def appendZeros (p : Array UInt8) : Nat → Array UInt8
+  | 0 => p
+  | n + 1 => appendZeros (p.push 0x00) n
+
 def padMsg (msg : Array UInt8) : Array UInt8 :=
   let bitLen : UInt64 := msg.size.toUInt64 * 8
   let p := msg.push 0x80
-  let p := Id.run do
-    let mut p := p
-    while p.size % 64 != 56 do
-      p := p.push 0x00
-    return p
+  let padLen := (119 - msg.size % 64) % 64
+  let p := appendZeros p padLen
   let p := p.push (bitLen >>> 56).toUInt8
   let p := p.push (bitLen >>> 48).toUInt8
   let p := p.push (bitLen >>> 40).toUInt8

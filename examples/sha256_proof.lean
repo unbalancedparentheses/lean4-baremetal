@@ -9,10 +9,12 @@
 --   1. Every bitwise operation (rotr, ch, maj, sigmas) matches FIPS 180-4 spec
 --      — universally quantified over ALL 32-bit inputs via `bv_decide`
 --   2. FIPS 180-4 test vectors verified at COMPILE TIME via `native_decide`
+--   3. Universal structural properties: sha256 always returns 8 elements,
+--      messageSchedule returns 64, etc. — proven for ALL inputs
 --
 -- Trust model (same as HACL*, Fiat-Crypto):
 --   Trusted: Lean kernel, lean -c compiler, GCC cross-compiler, freestanding runtime
---   Proven:  Bitwise ops correct, test vectors match
+--   Proven:  Bitwise ops correct, test vectors match, structural properties universal
 
 import sha256
 import Std.Tactic.BVDecide
@@ -91,26 +93,107 @@ theorem sha256_empty :
     #[0xe3b0c442, 0x98fc1c14, 0x9afbf4c8, 0x996fb924,
       0x27ae41e4, 0x649b934c, 0xa495991b, 0x7852b855] := by native_decide
 
-/-! ## Section 4: Structural properties -/
+-- FIPS 180-4 B.2: SHA-256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+-- 56-byte message → two 64-byte blocks after padding (tests multi-block processing)
+theorem sha256_two_blocks :
+    sha256 #[0x61, 0x62, 0x63, 0x64, 0x62, 0x63, 0x64, 0x65,
+             0x63, 0x64, 0x65, 0x66, 0x64, 0x65, 0x66, 0x67,
+             0x65, 0x66, 0x67, 0x68, 0x66, 0x67, 0x68, 0x69,
+             0x67, 0x68, 0x69, 0x6a, 0x68, 0x69, 0x6a, 0x6b,
+             0x69, 0x6a, 0x6b, 0x6c, 0x6a, 0x6b, 0x6c, 0x6d,
+             0x6b, 0x6c, 0x6d, 0x6e, 0x6c, 0x6d, 0x6e, 0x6f,
+             0x6d, 0x6e, 0x6f, 0x70, 0x6e, 0x6f, 0x70, 0x71] =
+    #[0x248d6a61, 0xd20638b8, 0xe5c02693, 0x0c3e6039,
+      0xa33ce459, 0x64ff2167, 0xf6ecedd4, 0x19db06c1] := by native_decide
+
+/-! ## Section 4: Structural properties (universal) -/
 
 -- compress always returns exactly 8 elements (universal, all inputs)
 theorem compress_size (hash w : Array UInt32) :
     (compress hash w).size = 8 := by
   unfold compress; rfl
 
--- sha256 always returns 8 elements (concrete instances via native_decide)
-theorem sha256_abc_size :
-    (sha256 #[0x61, 0x62, 0x63]).size = 8 := by native_decide
+theorem H0_size : H0.size = 8 := by native_decide
 
-theorem sha256_empty_size :
-    (sha256 #[]).size = 8 := by native_decide
+-- parseWords grows acc by (16 - i) elements
+theorem parseWords_size (block : Array UInt8) (i : Nat) (acc : Array UInt32) (hi : i ≤ 16) :
+    (parseWords block i acc).size = acc.size + (16 - i) := by
+  unfold parseWords
+  split
+  · omega
+  · dsimp only
+    rw [parseWords_size _ _ _ (by omega), Array.size_push]; omega
+termination_by 16 - i
 
--- padMsg output is always a multiple of 64 bytes (concrete instances)
-theorem padMsg_abc_mod64 :
-    (padMsg #[0x61, 0x62, 0x63]).size % 64 = 0 := by native_decide
+-- expandWords extends array to exactly 64 elements
+theorem expandWords_size (w : Array UInt32) (i : Nat) (hi : i ≤ 64) (hw : w.size = i) :
+    (expandWords w i).size = 64 := by
+  unfold expandWords
+  split
+  · omega
+  · dsimp only
+    exact expandWords_size _ (i + 1) (by omega) (by simp [Array.size_push, hw])
+termination_by 64 - i
 
-theorem padMsg_empty_mod64 :
-    (padMsg #[]).size % 64 = 0 := by native_decide
+-- messageSchedule always returns 64 elements
+theorem messageSchedule_size (block : Array UInt8) :
+    (messageSchedule block).size = 64 := by
+  unfold messageSchedule
+  have h : (parseWords block 0 #[]).size = 16 := by
+    have := parseWords_size block 0 #[] (by omega)
+    simpa using this
+  exact expandWords_size _ 16 (by omega) h
+
+-- extractBlock grows acc by (64 - j) elements
+theorem extractBlock_size (padded : Array UInt8) (off j : Nat) (acc : Array UInt8) (hj : j ≤ 64) :
+    (extractBlock padded off j acc).size = acc.size + (64 - j) := by
+  unfold extractBlock
+  split
+  · omega
+  · rw [extractBlock_size _ _ _ _ (by omega), Array.size_push]; omega
+termination_by 64 - j
+
+-- sha256Loop preserves 8-element hash (universal, all inputs)
+theorem sha256Loop_size (padded : Array UInt8) (numBlocks i : Nat) (hash : Array UInt32)
+    (hh : hash.size = 8) :
+    (sha256Loop padded numBlocks i hash).size = 8 := by
+  unfold sha256Loop
+  split
+  · exact hh
+  · dsimp only
+    apply sha256Loop_size
+    exact compress_size _ _
+termination_by numBlocks - i
+
+-- sha256 always returns exactly 8 elements (universal, all inputs)
+theorem sha256_size (msg : Array UInt8) :
+    (sha256 msg).size = 8 := by
+  unfold sha256
+  exact sha256Loop_size _ _ _ _ H0_size
+
+-- appendZeros adds exactly n bytes
+theorem appendZeros_size (p : Array UInt8) (n : Nat) :
+    (appendZeros p n).size = p.size + n := by
+  induction n generalizing p with
+  | zero => simp [appendZeros]
+  | succ n ih => simp [appendZeros, ih, Array.size_push]; omega
+
+-- padMsg output is always a multiple of 64 bytes (universal, all inputs)
+theorem padMsg_size_mod64 (msg : Array UInt8) :
+    (padMsg msg).size % 64 = 0 := by
+  simp [padMsg, appendZeros_size, Array.size_push]
+  omega
+
+-- compressRounds at round 64 is identity (base case)
+theorem compressRounds_done (w : Array UInt32) (st : HashState) :
+    compressRounds w st 64 = st := by
+  unfold compressRounds; simp
+
+-- compressRounds directly implements FIPS 180-4 Section 6.2.2:
+--   T1 = h + Σ1(e) + Ch(e,f,g) + K_i + W_i
+--   T2 = Σ0(a) + Maj(a,b,c)
+--   (a,b,c,d,e,f,g,h) ← (T1+T2, a, b, c, d+T1, e, f, g)
+-- The bitwise operations (Σ0, Σ1, Ch, Maj) are proven correct in Section 2.
 
 /-! ## Section 5: Structural properties of the bitwise algebra -/
 
