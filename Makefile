@@ -54,7 +54,19 @@ REAL_CC := $(shell command -v $(CC) 2>/dev/null || \
                    command -v $(CC_ALT2) 2>/dev/null || \
                    command -v $(CC_ALT3) 2>/dev/null)
 
-.PHONY: all clean run lean-c objdump
+.PHONY: all clean run lean-c objdump nix-build nix-run nix-clean
+
+# Nix wrappers — run everything inside nix develop, no manual shell needed
+NIX := nix --extra-experimental-features 'nix-command flakes'
+
+nix-build:
+	$(NIX) develop --command make all
+
+nix-run:
+	$(NIX) develop --command make run
+
+nix-clean:
+	$(NIX) develop --command make clean
 
 all: $(KERNEL)
 
