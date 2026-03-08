@@ -432,6 +432,10 @@ uint8_t lean_nat_big_eq(lean_object *a, lean_object *b);
 uint8_t lean_nat_big_le(lean_object *a, lean_object *b);
 uint8_t lean_nat_big_lt(lean_object *a, lean_object *b);
 
+/* Nat/Int conversions */
+lean_object *lean_nat_to_int(lean_object *n);
+lean_object *lean_string_length(lean_object *s);
+
 /* Int big operations (stubs) */
 lean_object *lean_int_big_neg(lean_object *a);
 lean_object *lean_int_big_add(lean_object *a, lean_object *b);

@@ -1,10 +1,16 @@
 -- SHA-256 (FIPS 180-4) in pure Lean 4 for bare-metal RISC-V
+--
+-- This file is the single source of truth for the SHA-256 implementation.
+-- examples/sha256_proof.lean imports it via `import sha256`, so the formal
+-- proofs (bv_decide, native_decide) apply to this exact code.
 
 -- RISC-V cycle counter (implemented in lean_rt.c)
 @[extern "lean_cycles_now"]
 opaque cyclesNow : IO UInt64
 
--- SHA-256 round constants
+def getU32 (a : Array UInt32) (i : Nat) : UInt32 := a.getD i 0
+def getU8 (a : Array UInt8) (i : Nat) : UInt8 := a.getD i 0
+
 def K : Array UInt32 := #[
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
   0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -24,63 +30,41 @@ def K : Array UInt32 := #[
   0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]
 
--- Initial hash values
 def H0 : Array UInt32 := #[
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 ]
 
--- Unchecked array access helper
-@[inline] def getU32 (a : Array UInt32) (i : Nat) : UInt32 :=
-  a.getD i 0
-@[inline] def getU8 (a : Array UInt8) (i : Nat) : UInt8 :=
-  a.getD i 0
+@[inline] def rotr (x n : UInt32) : UInt32 := (x >>> n) ||| (x <<< (32 - n))
+@[inline] def ch (x y z : UInt32) : UInt32 := (x &&& y) ^^^ ((~~~ x) &&& z)
+@[inline] def maj (x y z : UInt32) : UInt32 := (x &&& y) ^^^ (x &&& z) ^^^ (y &&& z)
+@[inline] def bigSigma0 (x : UInt32) : UInt32 := rotr x 2 ^^^ rotr x 13 ^^^ rotr x 22
+@[inline] def bigSigma1 (x : UInt32) : UInt32 := rotr x 6 ^^^ rotr x 11 ^^^ rotr x 25
+@[inline] def smallSigma0 (x : UInt32) : UInt32 := rotr x 7 ^^^ rotr x 18 ^^^ (x >>> 3)
+@[inline] def smallSigma1 (x : UInt32) : UInt32 := rotr x 17 ^^^ rotr x 19 ^^^ (x >>> 10)
 
--- Bitwise operations
-@[inline] def rotr (x : UInt32) (n : UInt32) : UInt32 :=
-  (x >>> n) ||| (x <<< (32 - n))
+def parseWords (block : Array UInt8) (i : Nat) (acc : Array UInt32) : Array UInt32 :=
+  if i >= 16 then acc
+  else
+    let b0 := (getU8 block (i * 4)).toUInt32
+    let b1 := (getU8 block (i * 4 + 1)).toUInt32
+    let b2 := (getU8 block (i * 4 + 2)).toUInt32
+    let b3 := (getU8 block (i * 4 + 3)).toUInt32
+    parseWords block (i + 1) (acc.push ((b0 <<< 24) ||| (b1 <<< 16) ||| (b2 <<< 8) ||| b3))
+termination_by 16 - i
 
-@[inline] def ch (x y z : UInt32) : UInt32 :=
-  (x &&& y) ^^^ ((~~~ x) &&& z)
+def expandWords (w : Array UInt32) (i : Nat) : Array UInt32 :=
+  if i >= 64 then w
+  else
+    let s0 := smallSigma0 (getU32 w (i - 15))
+    let s1 := smallSigma1 (getU32 w (i - 2))
+    let val := getU32 w (i - 16) + s0 + getU32 w (i - 7) + s1
+    expandWords (w.push val) (i + 1)
+termination_by 64 - i
 
-@[inline] def maj (x y z : UInt32) : UInt32 :=
-  (x &&& y) ^^^ (x &&& z) ^^^ (y &&& z)
-
-@[inline] def bigSigma0 (x : UInt32) : UInt32 :=
-  rotr x 2 ^^^ rotr x 13 ^^^ rotr x 22
-
-@[inline] def bigSigma1 (x : UInt32) : UInt32 :=
-  rotr x 6 ^^^ rotr x 11 ^^^ rotr x 25
-
-@[inline] def smallSigma0 (x : UInt32) : UInt32 :=
-  rotr x 7 ^^^ rotr x 18 ^^^ (x >>> 3)
-
-@[inline] def smallSigma1 (x : UInt32) : UInt32 :=
-  rotr x 17 ^^^ rotr x 19 ^^^ (x >>> 10)
-
--- Build message schedule: 16 words from block, expand to 64
 def messageSchedule (block : Array UInt8) : Array UInt32 :=
-  -- Parse 16 big-endian UInt32 words from 64-byte block
-  let w : Array UInt32 := Id.run do
-    let mut w : Array UInt32 := #[]
-    for i in [:16] do
-      let b0 := (getU8 block (i * 4)).toUInt32
-      let b1 := (getU8 block (i * 4 + 1)).toUInt32
-      let b2 := (getU8 block (i * 4 + 2)).toUInt32
-      let b3 := (getU8 block (i * 4 + 3)).toUInt32
-      w := w.push ((b0 <<< 24) ||| (b1 <<< 16) ||| (b2 <<< 8) ||| b3)
-    return w
-  -- Expand to 64 words
-  Id.run do
-    let mut w := w
-    for i in [16:64] do
-      let s0 := smallSigma0 (getU32 w (i - 15))
-      let s1 := smallSigma1 (getU32 w (i - 2))
-      let val := getU32 w (i - 16) + s0 + getU32 w (i - 7) + s1
-      w := w.push val
-    return w
+  expandWords (parseWords block 0 #[]) 16
 
--- Compression: 64 rounds
 structure HashState where
   a : UInt32
   b : UInt32
@@ -90,70 +74,61 @@ structure HashState where
   f : UInt32
   g : UInt32
   h : UInt32
+  deriving DecidableEq, Repr
+
+def compressRounds (w : Array UInt32) (st : HashState) (i : Nat) : HashState :=
+  if i >= 64 then st
+  else
+    let t1 := st.h + bigSigma1 st.e + ch st.e st.f st.g + getU32 K i + getU32 w i
+    let t2 := bigSigma0 st.a + maj st.a st.b st.c
+    compressRounds w { a := t1 + t2, b := st.a, c := st.b, d := st.c,
+                       e := st.d + t1, f := st.e, g := st.f, h := st.g } (i + 1)
+termination_by 64 - i
 
 def compress (hash : Array UInt32) (w : Array UInt32) : Array UInt32 :=
   let init : HashState := {
-    a := getU32 hash 0, b := getU32 hash 1,
-    c := getU32 hash 2, d := getU32 hash 3,
-    e := getU32 hash 4, f := getU32 hash 5,
-    g := getU32 hash 6, h := getU32 hash 7
+    a := getU32 hash 0, b := getU32 hash 1, c := getU32 hash 2, d := getU32 hash 3,
+    e := getU32 hash 4, f := getU32 hash 5, g := getU32 hash 6, h := getU32 hash 7
   }
-  let st := Id.run do
-    let mut st := init
-    for i in [:64] do
-      let t1 := st.h + bigSigma1 st.e + ch st.e st.f st.g +
-                getU32 K i + getU32 w i
-      let t2 := bigSigma0 st.a + maj st.a st.b st.c
-      st := {
-        a := t1 + t2
-        b := st.a
-        c := st.b
-        d := st.c
-        e := st.d + t1
-        f := st.e
-        g := st.f
-        h := st.g
-      }
-    return st
+  let st := compressRounds w init 0
   #[getU32 hash 0 + st.a, getU32 hash 1 + st.b,
     getU32 hash 2 + st.c, getU32 hash 3 + st.d,
     getU32 hash 4 + st.e, getU32 hash 5 + st.f,
     getU32 hash 6 + st.g, getU32 hash 7 + st.h]
 
--- Padding: append 0x80, zeros to 56 mod 64, then 64-bit BE length
-def pad (msg : Array UInt8) : Array UInt8 :=
+def padMsg (msg : Array UInt8) : Array UInt8 :=
   let bitLen : UInt64 := msg.size.toUInt64 * 8
-  -- Append 0x80 and pad with zeros until length ≡ 56 (mod 64)
-  let padded := Id.run do
-    let mut p := msg.push 0x80
+  let p := msg.push 0x80
+  let p := Id.run do
+    let mut p := p
     while p.size % 64 != 56 do
       p := p.push 0x00
     return p
-  -- Append 64-bit big-endian bit length
-  let padded := padded.push (bitLen >>> 56).toUInt8
-  let padded := padded.push (bitLen >>> 48).toUInt8
-  let padded := padded.push (bitLen >>> 40).toUInt8
-  let padded := padded.push (bitLen >>> 32).toUInt8
-  let padded := padded.push (bitLen >>> 24).toUInt8
-  let padded := padded.push (bitLen >>> 16).toUInt8
-  let padded := padded.push (bitLen >>> 8).toUInt8
-  padded.push bitLen.toUInt8
+  let p := p.push (bitLen >>> 56).toUInt8
+  let p := p.push (bitLen >>> 48).toUInt8
+  let p := p.push (bitLen >>> 40).toUInt8
+  let p := p.push (bitLen >>> 32).toUInt8
+  let p := p.push (bitLen >>> 24).toUInt8
+  let p := p.push (bitLen >>> 16).toUInt8
+  let p := p.push (bitLen >>> 8).toUInt8
+  p.push bitLen.toUInt8
 
--- SHA-256 hash function
+def extractBlock (padded : Array UInt8) (off : Nat) (j : Nat) (acc : Array UInt8) : Array UInt8 :=
+  if j >= 64 then acc
+  else extractBlock padded off (j + 1) (acc.push (getU8 padded (off + j)))
+termination_by 64 - j
+
+def sha256Loop (padded : Array UInt8) (numBlocks : Nat) (i : Nat) (hash : Array UInt32) : Array UInt32 :=
+  if i >= numBlocks then hash
+  else
+    let block := extractBlock padded (i * 64) 0 #[]
+    let w := messageSchedule block
+    sha256Loop padded numBlocks (i + 1) (compress hash w)
+termination_by numBlocks - i
+
 def sha256 (msg : Array UInt8) : Array UInt32 :=
-  let padded := pad msg
-  let numBlocks := padded.size / 64
-  Id.run do
-    let mut hash := H0
-    for i in [:numBlocks] do
-      let block : Array UInt8 := Id.run do
-        let mut b : Array UInt8 := #[]
-        for j in [:64] do
-          b := b.push (getU8 padded (i * 64 + j))
-        return b
-      let w := messageSchedule block
-      hash := compress hash w
-    return hash
+  let padded := padMsg msg
+  sha256Loop padded (padded.size / 64) 0 H0
 
 -- Hex output
 def nibbleToHex (n : UInt8) : Char :=

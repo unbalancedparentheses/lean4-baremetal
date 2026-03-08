@@ -4,11 +4,6 @@
 #   1. lean examples/$(EXAMPLE).lean -c build/$(EXAMPLE).c    (Lean → C)
 #   2. riscv64 cross-compile all C + assembly                  (C → ELF)
 #   3. qemu-system-riscv64 runs the binary                     (ELF → bare-metal)
-#
-# Usage:
-#   make                       # build hello example (default)
-#   make EXAMPLE=sha256        # build sha256 example
-#   make EXAMPLE=sha256 run    # build and run sha256 on QEMU
 
 # Tools
 LEAN      ?= lean
@@ -55,17 +50,18 @@ ALL_OBJS  := $(ASM_OBJ) $(C_OBJS) $(LEAN_OBJ)
 # Output
 KERNEL    := $(BUILDDIR)/kernel.elf
 
+.PHONY: all clean run lean-c objdump verify test help \
+        nix-build nix-run nix-clean nix-verify nix-test
 
-.PHONY: all clean run lean-c objdump verify nix-build nix-run nix-clean nix-verify
+# ---- Nix wrappers (run everything inside nix develop) ----
 
-# Nix wrappers — run everything inside nix develop, no manual shell needed
 NIX := nix --extra-experimental-features 'nix-command flakes'
 
 nix-build:
-	$(NIX) develop --command make all
+	$(NIX) develop --command make EXAMPLE=$(EXAMPLE) all
 
 nix-run:
-	$(NIX) develop --command make run
+	$(NIX) develop --command make EXAMPLE=$(EXAMPLE) run
 
 nix-clean:
 	$(NIX) develop --command make clean
@@ -73,53 +69,106 @@ nix-clean:
 nix-verify:
 	$(NIX) develop --command make verify
 
+nix-test:
+	$(NIX) develop --command make test
+
+# ---- Build targets ----
+
 all: $(KERNEL)
 
-# Step 1: Compile Lean to C
+# Compile Lean to C
 lean-c: $(LEAN_C)
 
 $(LEAN_C): $(LEAN_SRC) | $(BUILDDIR)
 	@echo "  LEAN    $< -> $@"
 	$(LEAN) $< -c $@
 
-# Step 2: Compile assembly
+# Compile assembly
 $(ASM_OBJ): $(ASM_SRC) | $(BUILDDIR)
 	@echo "  AS      $<"
 	$(CROSS_CC) $(CFLAGS) -c $< -o $@
 
-# Step 3: Compile C sources
+# Compile C sources
 $(BUILDDIR)/%.o: %.c lean_rt.h uart.h | $(BUILDDIR)
 	@echo "  CC      $<"
 	$(CROSS_CC) $(CFLAGS) -c $< -o $@
 
-# Step 4: Compile Lean-generated C (needs special include handling)
+# Compile Lean-generated C
 $(LEAN_OBJ): $(LEAN_C) lean_rt.h | $(BUILDDIR)
 	@echo "  CC      $< (lean-generated)"
 	$(CROSS_CC) $(CFLAGS) -Wno-unused-function -Wno-missing-field-initializers -c $< -o $@
 
-# Step 5: Link
+# Link
 $(KERNEL): $(ALL_OBJS)
 	@echo "  LD      $@"
 	$(CROSS_CC) $(LDFLAGS) $(ALL_OBJS) -o $@
-	@echo "  Built $(KERNEL) ($(shell stat -f%z $@ 2>/dev/null || stat -c%s $@) bytes)"
+	@size=$$(stat -f%z $@ 2>/dev/null || stat -c%s $@); echo "  Built $(KERNEL) ($$size bytes)"
 
-# Run on QEMU
+# ---- Run / test / verify ----
+
 run: $(KERNEL)
 	@echo "  QEMU    $(KERNEL)"
 	@echo "  (Press Ctrl-A X to exit QEMU)"
 	$(QEMU) $(QEMUFLAGS) -kernel $(KERNEL)
 
-# Useful for debugging
+# Formal verification: sha256_proof imports sha256 via lake.
+# If sha256.lean changes and breaks a proof, this fails.
+verify:
+	@echo "  VERIFY  examples/sha256_proof.lean (via lake build)"
+	lake build sha256_proof
+
+# Automated test: build, run on QEMU, check expected output
+test:
+	@echo "  TEST    hello"
+	@$(MAKE) --no-print-directory EXAMPLE=hello all
+	@output=$$(timeout 10 $(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/kernel.elf 2>/dev/null); \
+	if echo "$$output" | grep -q "Hello from bare-metal Lean!"; then \
+		echo "  PASS    hello"; \
+	else \
+		echo "  FAIL    hello"; echo "$$output"; exit 1; \
+	fi
+	@$(MAKE) --no-print-directory EXAMPLE=sha256 all
+	@echo "  TEST    sha256"
+	@output=$$(timeout 10 $(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/kernel.elf 2>/dev/null); \
+	if echo "$$output" | grep -q "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"; then \
+		echo "  PASS    sha256"; \
+	else \
+		echo "  FAIL    sha256"; echo "$$output"; exit 1; \
+	fi
+	@echo "  ALL TESTS PASSED"
+
+# ---- Utilities ----
+
 objdump: $(KERNEL)
 	$(subst gcc,objdump,$(CROSS_CC)) -d $(KERNEL) | head -100
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
 
-# Formal verification: typecheck proof file (if lean accepts it, all proofs are valid)
-verify:
-	@echo "  VERIFY  examples/sha256_proof.lean"
-	$(LEAN) examples/sha256_proof.lean
-
 clean:
-	rm -rf $(BUILDDIR)
+	rm -rf $(BUILDDIR) .lake
+
+help:
+	@echo "Usage: make [TARGET] [EXAMPLE=hello|sha256]"
+	@echo ""
+	@echo "Build targets:"
+	@echo "  all          Build kernel ELF (default)"
+	@echo "  run          Build and run on QEMU"
+	@echo "  test         Build both examples, run, check expected output"
+	@echo "  verify       Typecheck formal proofs via lake"
+	@echo "  lean-c       Compile Lean to C only"
+	@echo "  objdump      Disassemble kernel ELF"
+	@echo "  clean        Remove build artifacts"
+	@echo ""
+	@echo "Nix wrappers (no manual nix develop needed):"
+	@echo "  nix-build    make all inside nix develop"
+	@echo "  nix-run      make run inside nix develop"
+	@echo "  nix-test     make test inside nix develop"
+	@echo "  nix-verify   make verify inside nix develop"
+	@echo "  nix-clean    make clean inside nix develop"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make nix-run                   # build and run hello (default)"
+	@echo "  make EXAMPLE=sha256 nix-run    # build and run sha256"
+	@echo "  make nix-test                  # run all tests"
+	@echo "  make nix-verify                # check formal proofs"

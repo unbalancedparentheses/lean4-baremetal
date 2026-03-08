@@ -6,7 +6,7 @@
  * on QEMU virt.
  *
  * Key design decisions:
- *   - Bump allocator (no free, upgrade to slab later)
+ *   - Slab allocator with free lists (8 size classes, bump fallback for large)
  *   - Single-threaded (all TLS → globals, mutexes → no-ops)
  *   - No GMP (bignum operations panic for now)
  *   - No C++ (rewritten in C, exceptions → UART + halt)
@@ -25,7 +25,14 @@ extern size_t strlen(const char *s);
 extern void abort(void) __attribute__((noreturn));
 
 /* ========================================================================
- * Bump Allocator
+ * Slab Allocator
+ *
+ * 8 size classes with per-class free lists. Objects larger than the
+ * biggest class (544B) fall back to bump allocation (free is a no-op
+ * for those — they are rare and acceptable).
+ *
+ * Each allocated block has a 16-byte header storing the requested size.
+ * Freed blocks reuse the first 8 bytes of the payload as a next pointer.
  * ======================================================================== */
 
 extern char _heap_start[];
@@ -33,9 +40,21 @@ extern char _heap_end[];
 
 static char *heap_ptr;
 
+#define NUM_SIZE_CLASSES 8
+
+/* Total block sizes (including 16B malloc header) */
+static const size_t size_class_block[NUM_SIZE_CLASSES] = {
+    32, 48, 64, 80, 112, 144, 272, 544
+};
+
+/* Singly-linked free lists, one per size class */
+static void *free_lists[NUM_SIZE_CLASSES];
+
 static void heap_init(void)
 {
     heap_ptr = _heap_start;
+    for (int i = 0; i < NUM_SIZE_CLASSES; i++)
+        free_lists[i] = (void *)0;
 }
 
 static void *bump_alloc(size_t sz)
@@ -50,21 +69,55 @@ static void *bump_alloc(size_t sz)
     return p;
 }
 
+/* Find the size class for a given total block size, or -1 if too large */
+static int find_size_class(size_t total)
+{
+    for (int i = 0; i < NUM_SIZE_CLASSES; i++) {
+        if (total <= size_class_block[i])
+            return i;
+    }
+    return -1;
+}
+
 /* malloc/free/realloc for libc compatibility */
 void *malloc(size_t sz)
 {
     if (sz == 0) sz = 1;
-    /* Store size before the returned pointer so realloc can work */
     size_t total = sz + 16;
-    char *p = (char *)bump_alloc(total);
-    *(size_t *)p = sz;
-    return p + 16;
+    int cls = find_size_class(total);
+    char *block;
+
+    if (cls >= 0) {
+        /* Try free list first */
+        if (free_lists[cls]) {
+            block = (char *)free_lists[cls];
+            free_lists[cls] = *(void **)block;
+        } else {
+            block = (char *)bump_alloc(size_class_block[cls]);
+        }
+    } else {
+        /* Large object: bump-allocate exact size */
+        block = (char *)bump_alloc(total);
+    }
+
+    *(size_t *)block = sz;
+    return block + 16;
 }
 
 void free(void *ptr)
 {
-    /* Bump allocator: no-op */
-    (void)ptr;
+    if (!ptr) return;
+    char *block = (char *)ptr - 16;
+    size_t sz = *(size_t *)block;
+    size_t total = sz + 16;
+    int cls = find_size_class(total);
+
+    if (cls >= 0) {
+        /* Push onto free list */
+        *(void **)block = free_lists[cls];
+        free_lists[cls] = block;
+    }
+    /* Large objects: no-op (bump memory not reclaimed) */
 }
 
 void *realloc(void *ptr, size_t sz)
@@ -76,14 +129,28 @@ void *realloc(void *ptr, size_t sz)
         return (void *)0;
     }
     size_t old_sz = *(size_t *)((char *)ptr - 16);
+    size_t old_total = old_sz + 16;
+    size_t new_total = sz + 16;
+
+    /* If same size class, just update the header */
+    int old_cls = find_size_class(old_total);
+    int new_cls = find_size_class(new_total);
+    if (old_cls >= 0 && old_cls == new_cls) {
+        *(size_t *)((char *)ptr - 16) = sz;
+        return ptr;
+    }
+
     void *new_ptr = malloc(sz);
     size_t copy_sz = old_sz < sz ? old_sz : sz;
     memcpy(new_ptr, ptr, copy_sz);
+    free(ptr);
     return new_ptr;
 }
 
 void *calloc(size_t nmemb, size_t sz)
 {
+    if (sz != 0 && nmemb > (size_t)-1 / sz)
+        lean_internal_panic_out_of_memory();
     size_t total = nmemb * sz;
     void *p = malloc(total);
     memset(p, 0, total);
@@ -573,12 +640,19 @@ lean_object *lean_array_push(lean_object *a, lean_object *v)
 {
     lean_array_object *arr = (lean_array_object *)a;
     if (!lean_is_exclusive(a)) {
-        /* Shared or persistent array — must copy to preserve value semantics */
-        a = lean_copy_expand_array(a, arr->m_size < arr->m_capacity ? 0 : 1);
-        arr = (lean_array_object *)a;
+        /* Shared or persistent — copy, inc-ref elements, dec old */
+        lean_object *r = lean_copy_expand_array(a, arr->m_size < arr->m_capacity ? 0 : 1);
+        lean_array_object *na = (lean_array_object *)r;
+        for (size_t i = 0; i < na->m_size; i++)
+            lean_inc(lean_array_cptr(r)[i]);
+        lean_dec(a);
+        a = r;
+        arr = na;
     } else if (arr->m_size >= arr->m_capacity) {
+        lean_object *old = a;
         a = lean_copy_expand_array(a, 1);
         arr = (lean_array_object *)a;
+        lean_free_object(old);
     }
     lean_array_cptr(a)[arr->m_size] = v;
     arr->m_size++;
@@ -618,9 +692,7 @@ lean_object *lean_copy_expand_array(lean_object *a, int expand)
     na->m_capacity = new_cap;
     memcpy(lean_array_cptr(o), lean_array_cptr(a),
            old->m_size * sizeof(lean_object *));
-    /* Don't dec-ref elements since we copied them */
-    /* But do free the old array container (not elements) */
-    free(a);
+    /* Caller is responsible for freeing old array and adjusting refcounts */
     return o;
 }
 
@@ -1172,6 +1244,26 @@ lean_object *lean_int_big_neg(lean_object *a)
 BIG_PANIC(lean_int_big_add)
 BIG_PANIC(lean_int_big_sub)
 BIG_PANIC(lean_int_big_mul)
+
+/* ========================================================================
+ * Nat/Int Conversions
+ * ======================================================================== */
+
+lean_object *lean_nat_to_int(lean_object *n)
+{
+    /* For scalar Nat (small non-negative), the Int representation is identical */
+    if (lean_is_scalar(n))
+        return n;
+    /* Big Nat: wrap in Int.ofNat (ctor tag 0) */
+    lean_object *r = lean_alloc_ctor(0, 1, 0);
+    lean_ctor_set(r, 0, n);
+    return r;
+}
+
+lean_object *lean_string_length(lean_object *s)
+{
+    return lean_unsigned_to_nat(lean_string_len(s));
+}
 
 /* ========================================================================
  * Thunk (single-threaded: evaluate immediately)
