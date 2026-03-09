@@ -66,9 +66,19 @@ KERNEL    := $(BUILDDIR)/$(EXAMPLE).elf
 .PHONY: all clean run lean-c objdump verify test help \
 	        nix-build nix-run nix-clean nix-verify nix-test
 
-# ---- Nix wrappers (run everything inside nix develop) ----
+# ---- Nix environment detection ----
+# When IN_NIX_SHELL is set (by nix develop), we run commands directly.
+# Otherwise, we re-invoke make inside nix develop automatically.
+# This means `make run`, `make test`, etc. always work — no need to
+# remember `nix-run` vs `run`.
 
 NIX := nix --extra-experimental-features 'nix-command flakes'
+
+ifdef IN_NIX_SHELL
+  USE_NIX :=
+else
+  USE_NIX := 1
+endif
 
 nix-build:
 	$(NIX) develop --command make EXAMPLE=$(EXAMPLE) all
@@ -87,6 +97,20 @@ nix-test:
 
 # ---- Build targets ----
 
+ifdef USE_NIX
+# Outside nix develop: auto-delegate to nix wrappers
+all:
+	@$(MAKE) --no-print-directory EXAMPLE=$(EXAMPLE) nix-build
+run:
+	@$(MAKE) --no-print-directory EXAMPLE=$(EXAMPLE) nix-run
+test:
+	@$(MAKE) --no-print-directory nix-test
+verify:
+	@$(MAKE) --no-print-directory nix-verify
+clean:
+	@$(MAKE) --no-print-directory nix-clean
+else
+# Inside nix develop: run directly
 all: $(KERNEL)
 
 # Compile Lean to C.
@@ -209,10 +233,14 @@ $(BUILDDIR):
 clean:
 	rm -rf $(BUILDDIR) .lake
 
+endif # USE_NIX
+
 help:
 	@echo "Usage: make [TARGET] [EXAMPLE=name]"
 	@echo ""
-	@echo "Build targets:"
+	@echo "All targets auto-enter nix develop when run outside the Nix shell."
+	@echo ""
+	@echo "Targets:"
 	@echo "  all          Build kernel ELF (default)"
 	@echo "  run          Build and run on QEMU"
 	@echo "  test         Build all examples, run, check expected output"
@@ -221,15 +249,8 @@ help:
 	@echo "  objdump      Disassemble kernel ELF"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
-	@echo "Nix wrappers (no manual nix develop needed):"
-	@echo "  nix-build    make all inside nix develop"
-	@echo "  nix-run      make run inside nix develop"
-	@echo "  nix-test     make test inside nix develop"
-	@echo "  nix-verify   make verify inside nix develop"
-	@echo "  nix-clean    make clean inside nix develop"
-	@echo ""
 	@echo "Examples: hello sha256 alloc_stress io_error can torque runtime_test"
 	@echo ""
-	@echo "  make EXAMPLE=torque nix-run     # build and run torque gate"
-	@echo "  make nix-test                   # run all tests"
-	@echo "  make nix-verify                 # check formal proofs"
+	@echo "  make EXAMPLE=torque run     # build and run torque gate"
+	@echo "  make test                   # run all tests"
+	@echo "  make verify                 # check formal proofs"
