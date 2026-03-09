@@ -61,7 +61,7 @@ The trusted base is small and explicit. Everything above the runtime boundary is
 
 ### SHA-256 (72 theorems)
 
-`sha256_proof.lean` — 18 sections. The main result is end-to-end functional correctness:
+`sha256/sha256_proof.lean` — 18 sections. The main result is end-to-end functional correctness:
 
 ```lean
 theorem sha256_eq_spec (msg : Array UInt8) :
@@ -89,7 +89,7 @@ Everything is assembled into a single capstone theorem `sha256_correct` that bun
 
 ### CAN 2.0 frame parser (59 theorems)
 
-`can_proof.lean` verifies a parser for the MCP2515 CAN controller's SPI receive buffer format (ISO 11898 / Bosch CAN 2.0). The parser handles both CAN 2.0A (11-bit standard ID) and CAN 2.0B (29-bit extended ID) frames, plus CRC-15/CAN computation.
+`can/can_proof.lean` verifies a parser for the MCP2515 CAN controller's SPI receive buffer format (ISO 11898 / Bosch CAN 2.0). The parser handles both CAN 2.0A (11-bit standard ID) and CAN 2.0B (29-bit extended ID) frames, plus CRC-15/CAN computation.
 
 The proofs cover:
 
@@ -102,7 +102,7 @@ The proofs cover:
 
 ### Torque-enable gate (28 theorems)
 
-`torque_proof.lean` verifies an automotive torque-enable / drive-authority gate. The gate reads a CAN frame with bit-packed safety inputs (brake, gear position, motor temperature, battery status, emergency stop) and a driver enable request, then decides whether an electric motor may produce torque.
+`torque/torque_proof.lean` verifies an automotive torque-enable / drive-authority gate. The gate reads a CAN frame with bit-packed safety inputs (brake, gear position, motor temperature, battery status, emergency stop) and a driver enable request, then decides whether an electric motor may produce torque.
 
 The key safety properties, all universally quantified:
 
@@ -119,7 +119,7 @@ The torque gate imports verified CAN parsing (`can_lib`), demonstrating composab
 
 ### Shared proof library
 
-`bitfield.lean` provides 8 reusable UInt8 single-bit isolation lemmas, each proving that shift-mask extraction `(b &&& mask) != 0` equals BitVec bit access `b.toBitVec.getLsbD n` for all UInt8 inputs via `bv_decide`. Used by both CAN and torque proofs.
+`lib/bitfield.lean` provides 8 reusable UInt8 single-bit isolation lemmas, each proving that shift-mask extraction `(b &&& mask) != 0` equals BitVec bit access `b.toBitVec.getLsbD n` for all UInt8 inputs via `bv_decide`. Used by both CAN and torque proofs.
 
 ## What we had to replace
 
