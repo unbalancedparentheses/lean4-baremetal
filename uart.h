@@ -1,8 +1,7 @@
 #ifndef UART_H
 #define UART_H
 
-/* NS16550A UART driver for QEMU virt machine.
- * UART0 is memory-mapped at 0x10000000. */
+/* NS16550A UART driver using the active board's MMIO configuration. */
 
 void uart_init(void);
 void uart_putc(char c);

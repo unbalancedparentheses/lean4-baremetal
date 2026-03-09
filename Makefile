@@ -41,6 +41,7 @@ LEAN_C    := $(BUILDDIR)/$(EXAMPLE).c
 
 ASM_SRC   := boot.S
 C_SRCS    := lean_rt.c uart.c libc_min.c
+C_SRCS    += board.c
 
 # Object files
 ASM_OBJ   := $(BUILDDIR)/boot.o
@@ -158,6 +159,22 @@ test:
 	else \
 		echo "  FAIL    sha256"; echo "$$output"; exit 1; \
 	fi
+	@$(MAKE) --no-print-directory EXAMPLE=alloc_stress all
+	@echo "  TEST    alloc_stress"
+	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/alloc_stress.elf)); \
+	if echo "$$output" | grep -q "alloc-stress ok"; then \
+		echo "  PASS    alloc_stress"; \
+	else \
+		echo "  FAIL    alloc_stress"; echo "$$output"; exit 1; \
+	fi
+	@$(MAKE) --no-print-directory EXAMPLE=io_error all
+	@echo "  TEST    io_error"
+	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/io_error.elf)); \
+	if echo "$$output" | grep -q "\\[lean\\] IO error: expected runtime error"; then \
+		echo "  PASS    io_error"; \
+	else \
+		echo "  FAIL    io_error"; echo "$$output"; exit 1; \
+	fi
 	@echo "  ALL TESTS PASSED"
 
 # ---- Utilities ----
@@ -193,5 +210,7 @@ help:
 	@echo "Examples:"
 	@echo "  make nix-run                   # build and run hello (default)"
 	@echo "  make EXAMPLE=sha256 nix-run    # build and run sha256"
+	@echo "  make EXAMPLE=alloc_stress nix-run"
+	@echo "  make EXAMPLE=io_error nix-run"
 	@echo "  make nix-test                  # run all tests"
 	@echo "  make nix-verify                # check formal proofs"

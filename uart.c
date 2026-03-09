@@ -1,7 +1,7 @@
+#include "board.h"
 #include "uart.h"
 
-/* NS16550A UART registers (QEMU virt: base 0x10000000) */
-#define UART0_BASE  0x10000000UL
+/* NS16550A UART registers (board-specific MMIO base from board.c) */
 
 #define UART_THR    0   /* Transmit Holding Register (write) */
 #define UART_RBR    0   /* Receive Buffer Register (read) */
@@ -16,10 +16,10 @@
 #define UART_FCR_CLEAR     0x06    /* Clear RX and TX FIFOs */
 #define UART_LSR_TX_EMPTY  0x20    /* Transmit holding register empty */
 
-static volatile unsigned char *const uart = (unsigned char *)UART0_BASE;
-
 void uart_init(void)
 {
+    volatile unsigned char *const uart = (unsigned char *)board_uart_base();
+
     /* Disable interrupts */
     uart[UART_IER] = 0x00;
 
@@ -39,6 +39,8 @@ void uart_init(void)
 
 void uart_putc(char c)
 {
+    volatile unsigned char *const uart = (unsigned char *)board_uart_base();
+
     /* Wait for transmit holding register to be empty */
     while ((uart[UART_LSR] & UART_LSR_TX_EMPTY) == 0)
         ;

@@ -1077,13 +1077,32 @@ lean_object *lean_io_prim_put_str(lean_object *s, lean_object *w)
     return lean_io_result_mk_ok(lean_box(0));
 }
 
+static lean_object *lean_find_string_field(lean_object *o, unsigned depth)
+{
+    if (depth == 0 || lean_is_scalar(o))
+        return 0;
+    if (o->m_tag == LeanString)
+        return o;
+    if (o->m_tag <= 243) {
+        unsigned num_objs = o->m_other;
+        for (unsigned i = 0; i < num_objs; i++) {
+            lean_object *field = lean_ctor_get(o, i);
+            lean_object *s = lean_find_string_field(field, depth - 1);
+            if (s != 0)
+                return s;
+        }
+    }
+    return 0;
+}
+
 lean_object *lean_io_result_show_error(lean_object *r)
 {
     if (lean_io_result_is_error(r)) {
         lean_object *err = lean_ctor_get(r, 0);
-        if (!lean_is_scalar(err) && err->m_tag == LeanString) {
+        lean_object *msg = lean_find_string_field(err, 4);
+        if (msg != 0) {
             uart_puts("[lean] IO error: ");
-            uart_puts(lean_string_cstr(err));
+            uart_puts(lean_string_cstr(msg));
             uart_puts("\n");
         } else {
             uart_puts("[lean] IO error (non-string)\n");
