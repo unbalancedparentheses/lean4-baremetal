@@ -24,3 +24,8 @@ lean_lib can where
 lean_lib can_proof where
   srcDir := "examples"
   roots := #[`can_proof]
+
+-- Runtime coverage test (bare-metal entry point via `lean -c`)
+lean_exe runtime_test where
+  srcDir := "examples"
+  root := `runtime_test

@@ -185,6 +185,14 @@ test:
 	else \
 		echo "  FAIL    can"; echo "$$output"; exit 1; \
 	fi
+	@$(MAKE) --no-print-directory EXAMPLE=runtime_test all
+	@echo "  TEST    runtime_test"
+	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/runtime_test.elf)); \
+	if echo "$$output" | grep -q "runtime-test ok"; then \
+		echo "  PASS    runtime_test"; \
+	else \
+		echo "  FAIL    runtime_test"; echo "$$output"; exit 1; \
+	fi
 	@echo "  ALL TESTS PASSED"
 
 # ---- Utilities ----

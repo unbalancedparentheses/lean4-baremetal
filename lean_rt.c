@@ -83,6 +83,7 @@ static int find_size_class(size_t total)
 void *malloc(size_t sz)
 {
     if (sz == 0) sz = 1;
+    if (sz > (size_t)-1 - 16) lean_internal_panic_out_of_memory();
     size_t total = sz + 16;
     int cls = find_size_class(total);
     char *block;
@@ -526,7 +527,7 @@ lean_object *lean_string_mk(lean_object *cs)
     size_t byte_count = 0;
     size_t char_count = 0;
     lean_object *cur = cs;
-    while (cur->m_tag == 1) {  /* Cons */
+    while (!lean_is_scalar(cur) && cur->m_tag == 1) {  /* Cons */
         uint32_t ch = (uint32_t)lean_unbox(lean_ctor_get(cur, 0));
         if (ch < 0x80) byte_count += 1;
         else if (ch < 0x800) byte_count += 2;
@@ -548,7 +549,7 @@ lean_object *lean_string_mk(lean_object *cs)
     char *data = lean_string_cstr(o);
     size_t pos = 0;
     cur = cs;
-    while (cur->m_tag == 1) {
+    while (!lean_is_scalar(cur) && cur->m_tag == 1) {
         uint32_t ch = (uint32_t)lean_unbox(lean_ctor_get(cur, 0));
         if (ch < 0x80) {
             data[pos++] = (char)ch;
@@ -589,29 +590,36 @@ lean_object *lean_string_data(lean_object *s)
     /* Actually, build backwards from the end is complex for UTF-8.
      * Just build forward using a temporary array. */
     uint32_t *chars = (uint32_t *)malloc(len * sizeof(uint32_t));
+    size_t byte_sz = lean_string_size(s) - 1;
     size_t pos = 0;
+    size_t actual_len = 0;
     for (size_t i = 0; i < len; i++) {
+        if (pos >= byte_sz) break;
         uint8_t c = data[pos];
         if (c < 0x80) { chars[i] = c; pos += 1; }
         else if (c < 0xE0) {
+            if (pos + 1 >= byte_sz) break;
             chars[i] = ((uint32_t)(c & 0x1F) << 6) | (data[pos+1] & 0x3F);
             pos += 2;
         } else if (c < 0xF0) {
+            if (pos + 2 >= byte_sz) break;
             chars[i] = ((uint32_t)(c & 0x0F) << 12)
                      | ((uint32_t)(data[pos+1] & 0x3F) << 6)
                      | (data[pos+2] & 0x3F);
             pos += 3;
         } else {
+            if (pos + 3 >= byte_sz) break;
             chars[i] = ((uint32_t)(c & 0x07) << 18)
                      | ((uint32_t)(data[pos+1] & 0x3F) << 12)
                      | ((uint32_t)(data[pos+2] & 0x3F) << 6)
                      | (data[pos+3] & 0x3F);
             pos += 4;
         }
+        actual_len++;
     }
 
     /* Build list from end to start */
-    for (size_t i = len; i > 0; i--) {
+    for (size_t i = actual_len; i > 0; i--) {
         lean_object *cons = lean_alloc_ctor(1, 2, 0);
         lean_ctor_set(cons, 0, lean_box(chars[i-1]));
         lean_ctor_set(cons, 1, list);
@@ -1168,7 +1176,6 @@ static uint8_t g_panic_messages = 1;
 
 void lean_initialize_runtime_module(void)
 {
-    uart_init();
     heap_init();
 }
 
@@ -1223,45 +1230,40 @@ lean_object *lean_object_once(lean_object **slot, lean_object *(*init)(lean_obje
 
 /* We store ST refs as constructor objects with one field */
 
-lean_object *lean_st_mk_ref(lean_object *v, lean_object *w)
+lean_object *lean_st_mk_ref(lean_object *v)
 {
-    (void)w;
     lean_object *r = lean_alloc_ctor(0, 1, 0);
     lean_ctor_set(r, 0, v);
-    return lean_io_result_mk_ok(r);
+    return r;
 }
 
-lean_object *lean_st_ref_get(lean_object *r, lean_object *w)
+lean_object *lean_st_ref_get(lean_object *r)
 {
-    (void)w;
     lean_object *val = lean_ctor_get(r, 0);
     lean_inc(val);
-    return lean_io_result_mk_ok(val);
+    return val;
 }
 
-lean_object *lean_st_ref_set(lean_object *r, lean_object *v, lean_object *w)
+lean_object *lean_st_ref_set(lean_object *r, lean_object *v)
 {
-    (void)w;
     lean_object *old = lean_ctor_get(r, 0);
     lean_dec(old);
     lean_ctor_set(r, 0, v);
-    return lean_io_result_mk_ok(lean_box(0));
+    return lean_box(0);
 }
 
-lean_object *lean_st_ref_take(lean_object *r, lean_object *w)
+lean_object *lean_st_ref_take(lean_object *r)
 {
-    (void)w;
     lean_object *val = lean_ctor_get(r, 0);
     lean_ctor_set(r, 0, lean_box(0));
-    return lean_io_result_mk_ok(val);
+    return val;
 }
 
-lean_object *lean_st_ref_swap(lean_object *r, lean_object *v, lean_object *w)
+lean_object *lean_st_ref_swap(lean_object *r, lean_object *v)
 {
-    (void)w;
     lean_object *old = lean_ctor_get(r, 0);
     lean_ctor_set(r, 0, v);
-    return lean_io_result_mk_ok(old);
+    return old;
 }
 
 /* ========================================================================
@@ -1468,6 +1470,21 @@ lean_object *lean_byte_array_push(lean_object *a, uint8_t b)
     data[sa->m_size] = b;
     sa->m_size++;
     return a;
+}
+
+lean_object *lean_byte_array_size(lean_object *a)
+{
+    lean_sarray_object *sa = (lean_sarray_object *)a;
+    return lean_box(sa->m_size);
+}
+
+uint8_t lean_byte_array_get(lean_object *a, lean_object *i)
+{
+    lean_sarray_object *sa = (lean_sarray_object *)a;
+    size_t idx = lean_unbox(i);
+    if (idx >= sa->m_size) return 0;
+    uint8_t *data = (uint8_t *)((char *)a + sizeof(lean_sarray_object));
+    return data[idx];
 }
 
 lean_object *lean_copy_byte_array(lean_object *a)

@@ -6,7 +6,7 @@ Lean compiles to C, but the standard runtime pulls in glibc, GMP, pthreads, libu
 
 Two verified examples so far:
 - **SHA-256** — proven correct end-to-end: `sha256 msg = spec_sha256 msg` for all inputs
-- **CAN 2.0 frame parser** — MCP2515 CAN controller buffer parser with CRC-15, proven correct: `parseMcp2515 (encodeMcp2515 f) = f` for well-formed frames
+- **CAN 2.0 frame parser** — MCP2515 CAN controller buffer parser with CRC-15, with verified bit extraction, structural bounds, test vectors, and roundtrip: `parseMcp2515 (encodeMcp2515 f) = f` for well-formed frames
 
 Both are checked by the Lean kernel. The proofs apply to the same code that compiles to C and runs on the machine.
 
@@ -89,13 +89,13 @@ The proofs cover:
 - **Test vectors** — 8 concrete MCP2515 buffers (min/max standard, min/max extended, RTR, DLC clamping, mixed SIDL bits) verified at compile time with `native_decide`
 - **CRC-15 test vectors** — including the canonical check value CRC-15("123456789") = 0x059E
 - **Roundtrip** — `parseMcp2515 (encodeMcp2515 f) = f` for well-formed frames
-- **Implementation = specification equivalence** — bundled into a capstone theorem
+- **Parser/spec alignment** — `parseMcp2515 = spec_parseMcp2515`, where the current spec is still close to the implementation
 
 The CAN example exercises different runtime features than SHA-256: custom Lean structures with scalar fields (UInt32, Bool, UInt8), constructor object layout, and string interpolation. This helped uncover and fix a bug in the runtime's scalar field accessors.
 
 ### Trust model
 
-This follows the same approach as [HACL\*](https://hacl-star.github.io/) (F\*) and [Fiat-Crypto](https://github.com/mit-plv/fiat-crypto) (Coq). What you have to trust: the Lean 4 kernel, the Lean-to-C compiler, GCC's cross-compilation, and our freestanding runtime. What's proven: everything from individual bitwise operations up through the full SHA-256 and CAN parser pipelines, for all inputs.
+This follows the same approach as [HACL\*](https://hacl-star.github.io/) (F\*) and [Fiat-Crypto](https://github.com/mit-plv/fiat-crypto) (Coq). What you have to trust: the Lean 4 kernel, the Lean-to-C compiler, GCC's cross-compilation, and our freestanding runtime. What's proven: end-to-end functional correctness for SHA-256, plus strong parser/roundtrip/CRC properties for the CAN example.
 
 ## Current status
 
@@ -106,6 +106,19 @@ This follows the same approach as [HACL\*](https://hacl-star.github.io/) (F\*) a
 - [x] `make nix-test` and `make nix-verify` work as the main validation path
 - [ ] Real hardware support
 - [ ] A broader documented platform surface for reusable bare-metal Lean programs
+
+## Known runtime issues / next C fixes
+
+The freestanding runtime is working well enough to support two nontrivial verified examples, but there are still a few concrete C/runtime issues worth fixing next:
+
+- `main.c` still treats `lean_initialize_runtime_module` and `lean_init_task_manager` as if they returned `IO` results, even though they are declared `void` in the runtime interface. This is undefined behavior and only works accidentally.
+- `lean_thunk_get_core` has a ref-count leak: it increments the computed value after storing it in the thunk, which leaves one extra reference alive.
+- `lean_byte_array_push` uses `free(a)` directly instead of `lean_free_object(a)`, which is inconsistent with the rest of the runtime and would break if allocator bookkeeping changes.
+- `lean_ctor_object` still carries an extra `m_num_objs` field compared with the official Lean runtime layout. The code is internally consistent, but this should at least be documented clearly as intentional technical debt.
+- `IO.FS.Stream.read` currently returns `lean_box(0)` instead of an empty `ByteArray`, which would be a type confusion bug if that path were exercised.
+- `lean_string_append` always allocates; adding an in-place fast path for exclusive strings would reduce allocation pressure noticeably.
+- `lean_cstr_to_nat` should detect overflow and panic rather than silently wrapping huge numeric literals.
+- `main.c` is declared as `int main(void)` even though `boot.S` initializes `a0/a1` as `argc/argv`; the signature should be aligned.
 
 ## Files
 

@@ -429,11 +429,11 @@ lean_object *lean_io_prim_handle_get_line(lean_object *h, lean_object *w);
 lean_object *lean_object_once(lean_object **slot, lean_object *(*init)(lean_object *));
 
 /* ST Ref */
-lean_object *lean_st_mk_ref(lean_object *v, lean_object *w);
-lean_object *lean_st_ref_get(lean_object *r, lean_object *w);
-lean_object *lean_st_ref_set(lean_object *r, lean_object *v, lean_object *w);
-lean_object *lean_st_ref_take(lean_object *r, lean_object *w);
-lean_object *lean_st_ref_swap(lean_object *r, lean_object *v, lean_object *w);
+lean_object *lean_st_mk_ref(lean_object *v);
+lean_object *lean_st_ref_get(lean_object *r);
+lean_object *lean_st_ref_set(lean_object *r, lean_object *v);
+lean_object *lean_st_ref_take(lean_object *r);
+lean_object *lean_st_ref_swap(lean_object *r, lean_object *v);
 
 /* Nat big operations (stubs — panic for now) */
 lean_object *lean_nat_big_succ(lean_object *a);
@@ -470,6 +470,8 @@ lean_object *lean_float_to_string(double d);
 lean_object *lean_byte_array_mk(lean_object *l);
 lean_object *lean_byte_array_data(lean_object *a);
 lean_object *lean_byte_array_push(lean_object *a, uint8_t b);
+lean_object *lean_byte_array_size(lean_object *a);
+uint8_t lean_byte_array_get(lean_object *a, lean_object *i);
 lean_object *lean_copy_byte_array(lean_object *a);
 
 /* Platform */

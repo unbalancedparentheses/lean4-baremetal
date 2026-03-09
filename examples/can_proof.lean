@@ -5,13 +5,16 @@
 -- If someone changes can.lean, these proofs must still typecheck or
 -- the build fails — the Lean kernel enforces the guarantee.
 --
--- What this file proves:
+-- What this file proves (universally quantified unless noted):
 --   1. Bit extraction (ID shifts/masks) matches MCP2515 spec
---   2. Test vectors verified at COMPILE TIME via `native_decide`
+--   2. Test vectors verified at COMPILE TIME via `native_decide` (concrete)
 --   3. Structural properties: id bounds, dlc ≤ 8, data.size = 8
---   4. Roundtrip: parseMcp2515 (encodeMcp2515 f) = f for well-formed frames
---   5. CRC-15 byte = 8x bit step, CRC-15 test vectors
---   6. End-to-end: implementation = reference specification
+--   4. Roundtrip: parseMcp2515 (encodeMcp2515 f) = f for 7 concrete frames
+--      (universal roundtrip infeasible via bv_decide on 13-byte structures)
+--   5. CRC-15: byte processing = 8× bit steps (universal)
+--   6. CRC-15: loop equivalence (universal)
+--   7. Parser well-formedness: parseMcp2515 always produces a well-formed frame
+--   8. End-to-end: implementation = reference specification (universal)
 --
 -- Trust model:
 --   Trusted: Lean kernel, lean -c compiler, GCC cross-compiler, freestanding runtime
@@ -399,19 +402,12 @@ theorem crc15Byte_done (crc : UInt16) (byte : UInt8) :
     crc15Byte crc byte 8 = crc := by
   unfold crc15Byte; simp
 
--- crc15Byte = spec_crc15ByteBits verified on concrete inputs.
--- (The general proof requires deep kernel reduction of the recursive WF definition;
--- we verify the equivalence on representative inputs instead.)
-theorem crc15Byte_eq_spec_0x00 :
-    crc15Byte 0x0000 0x00 0 = spec_crc15ByteBits 0x0000 0x00 := by native_decide
-theorem crc15Byte_eq_spec_0x31 :
-    crc15Byte 0x0000 0x31 0 = spec_crc15ByteBits 0x0000 0x31 := by native_decide
-theorem crc15Byte_eq_spec_0xFF :
-    crc15Byte 0x0000 0xFF 0 = spec_crc15ByteBits 0x0000 0xFF := by native_decide
-theorem crc15Byte_eq_spec_0xD3 :
-    crc15Byte 0x0000 0xD3 0 = spec_crc15ByteBits 0x0000 0xD3 := by native_decide
-theorem crc15Byte_eq_spec_nonzero_crc :
-    crc15Byte 0x1234 0xAB 0 = spec_crc15ByteBits 0x1234 0xAB := by native_decide
+-- crc15Byte = spec_crc15ByteBits (universal — for ALL crc and byte values)
+-- Proof: unfold the 8-step recursion; each step matches the corresponding crc15Bit call.
+theorem crc15Byte_eq_spec (crc : UInt16) (byte : UInt8) :
+    crc15Byte crc byte 0 = spec_crc15ByteBits crc byte := by
+  unfold spec_crc15ByteBits
+  simp [crc15Byte]
 
 /-! ## Section 12: CRC-15 test vectors -/
 
@@ -437,7 +433,31 @@ theorem crc15_two_bytes :
     crc15 #[0xAB, 0xCD] =
     (crc15Byte (crc15Byte 0x0000 0xAB 0) 0xCD 0) := by native_decide
 
-/-! ## Section 13: Implementation = spec equivalence -/
+/-! ## Section 13: CRC-15 loop equivalence (universal) -/
+
+-- Reference spec: CRC-15 loop using spec_crc15ByteBits
+def spec_crc15Loop (data : Array UInt8) (i : Nat) (crc : UInt16) : UInt16 :=
+  if i ≥ data.size then crc
+  else spec_crc15Loop data (i + 1) (spec_crc15ByteBits crc (getU8 data i))
+termination_by data.size - i
+
+-- crc15Loop = spec_crc15Loop (universal — for ALL arrays, indices, and CRC values)
+theorem crc15Loop_eq_spec (data : Array UInt8) (i : Nat) (crc : UInt16) :
+    crc15Loop data i crc = spec_crc15Loop data i crc := by
+  unfold crc15Loop spec_crc15Loop
+  split
+  · rfl
+  · rw [crc15Byte_eq_spec]
+    exact crc15Loop_eq_spec data (i + 1) _
+termination_by data.size - i
+
+-- crc15 = spec_crc15Loop from 0 (universal)
+theorem crc15_eq_spec_full (data : Array UInt8) :
+    crc15 data = spec_crc15Loop data 0 0x0000 := by
+  unfold crc15
+  exact crc15Loop_eq_spec data 0 0x0000
+
+/-! ## Section 14: Implementation = spec equivalence (parser) -/
 
 -- Reference specification for the full parser
 def spec_parseMcp2515 (buf : Array UInt8) : CanFrame :=
@@ -470,17 +490,59 @@ theorem crc15_eq (data : Array UInt8) :
     crc15 data = crc15Loop data 0 0x0000 := by
   unfold crc15; rfl
 
-/-! ## Section 14: Capstone `can_parser_correct` theorem -/
+/-! ## Section 15: Well-formedness -/
+
+-- Standard ID is always < 2048 (11-bit bound) — via bv_decide on UInt operations
+-- Note: use < on UInt32 (= BitVec 32) which bv_decide supports; this is
+-- definitionally equivalent to .toNat < 2048 since UInt32.lt = Nat.lt on .toNat.
+private theorem extractStdId_lt_2048 (a b : UInt8) :
+    ((a.toUInt32 <<< 3) ||| (b.toUInt32 >>> 5)) < (2048 : UInt32) := by bv_decide
+
+theorem extractStdId_bounded (buf : Array UInt8) :
+    (extractStdId buf).toNat < 2048 := by
+  unfold extractStdId
+  exact extractStdId_lt_2048 (getU8 buf 0) (getU8 buf 1)
+
+-- Extended ID is always < 2^29 — via bv_decide on UInt operations
+private theorem extractExtId_lt_2_29 (a b c d : UInt8) :
+    ((a.toUInt32 <<< 21) ||| ((b.toUInt32 &&& 0xE0) <<< 13) |||
+     ((b.toUInt32 &&& 0x03) <<< 16) ||| (c.toUInt32 <<< 8) ||| d.toUInt32)
+    < (536870912 : UInt32) := by bv_decide
+
+theorem extractExtId_bounded (buf : Array UInt8) :
+    (extractExtId buf).toNat < 2 ^ 29 := by
+  unfold extractExtId
+  exact extractExtId_lt_2_29 (getU8 buf 0) (getU8 buf 1) (getU8 buf 2) (getU8 buf 3)
+
+-- parseMcp2515 always produces a well-formed frame (universal)
+theorem parseMcp2515_wellFormed (buf : Array UInt8) :
+    CanFrame.wellFormed (parseMcp2515 buf) := by
+  unfold CanFrame.wellFormed
+  refine ⟨parseMcp2515_data_size buf, parseMcp2515_dlc_le_8 buf, ?_⟩
+  unfold parseMcp2515 isExtended
+  simp only []
+  split
+  · exact extractExtId_bounded buf
+  · exact extractStdId_bounded buf
+
+/-! ## Section 16: Capstone `can_parser_correct` theorem -/
 
 /-- Full pipeline correctness for the CAN 2.0 frame parser.
 
-    For any input buffer, the implementation satisfies ALL of:
+    All conjuncts below are universally quantified (proven for ALL inputs).
+
     1. Output structure: data is always 8 bytes, DLC ≤ 8
-    2. Parser structure: parseMcp2515 = spec_parseMcp2515
-    3. Encoder structure: encodeMcp2515 always produces 13 bytes
-    4. extractData content: output[k] = buf[5+k]
-    5. CRC-15: byte processing = 8× bit-at-a-time steps
-    Test vectors (Section 3) and roundtrip (Section 9) verified separately. -/
+    2. Parser = reference specification (parseMcp2515 = spec_parseMcp2515)
+    3. Encoder always produces 13 bytes
+    4. Data extraction: output[k] = buf[5+k] for k < 8
+    5. CRC-15 byte = 8× bit step (universal)
+    6. CRC-15 loop equivalence (universal)
+    7. Well-formedness: std ID < 2048, ext ID < 2^29
+
+    NOT included (proven separately):
+    - Roundtrip parse(encode(f)) = f: 7 concrete frames via native_decide (Section 9).
+      Universal roundtrip is infeasible via bv_decide on 13-byte structures.
+    - CRC-15 test vectors: concrete values via native_decide (Section 12). -/
 theorem can_parser_correct (buf : Array UInt8) :
     -- 1. Data is always 8 bytes
     (parseMcp2515 buf).data.size = 8
@@ -493,11 +555,18 @@ theorem can_parser_correct (buf : Array UInt8) :
     -- 5. extractData content: output[k] = buf[5+k]
     ∧ (∀ (b : Array UInt8) (k : Nat), k < 8 →
         getU8 (extractData b 0 #[]) k = getU8 b (5 + k))
-    -- 6. CRC-15 bit step = spec step
-    ∧ (∀ (crc bit : UInt16), crc15Bit crc bit = spec_crc15Step crc bit) := by
+    -- 6. CRC-15 byte = 8× bit step (universal)
+    ∧ (∀ (crc : UInt16) (byte : UInt8), crc15Byte crc byte 0 = spec_crc15ByteBits crc byte)
+    -- 7. CRC-15 loop equivalence (universal)
+    ∧ (∀ (data : Array UInt8) (i : Nat) (crc : UInt16),
+        crc15Loop data i crc = spec_crc15Loop data i crc)
+    -- 8. Well-formedness: ID bounds always hold
+    ∧ CanFrame.wellFormed (parseMcp2515 buf) := by
   exact ⟨parseMcp2515_data_size buf,
          parseMcp2515_dlc_le_8 buf,
          parseMcp2515_eq_spec buf,
          encodeMcp2515_size,
          fun b k hk => extractData_content b k hk,
-         fun crc bit => crc15Bit_eq_spec crc bit⟩
+         fun crc byte => crc15Byte_eq_spec crc byte,
+         fun data i crc => crc15Loop_eq_spec data i crc,
+         parseMcp2515_wellFormed buf⟩

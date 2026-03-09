@@ -29,8 +29,10 @@ static void fatal_lean_error(const char *msg, lean_object *res)
     board_halt();
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     board_early_init();
     uart_init();
     uart_puts("lean4-baremetal: booting...\n");
