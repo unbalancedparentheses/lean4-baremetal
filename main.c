@@ -38,20 +38,11 @@ int main(void)
     uart_puts(board_name());
     uart_putc('\n');
 
-    /* Initialize the Lean runtime */
+    /* Initialize the Lean runtime (void — these cannot fail on bare-metal) */
+    lean_initialize_runtime_module();
+    lean_init_task_manager();
+
     lean_object *res;
-
-    res = lean_initialize_runtime_module();
-    if (lean_io_result_is_error(res))
-        fatal_lean_error("lean_initialize_runtime_module failed", res);
-    lean_dec(res);
-
-    /* Initialize the task manager (no-op on bare-metal) */
-    res = lean_init_task_manager();
-    if (lean_io_result_is_error(res))
-        fatal_lean_error("lean_init_task_manager failed", res);
-    lean_dec(res);
-
     lean_set_panic_messages(0);
 
     /* Initialize the Lean module (generated code) */

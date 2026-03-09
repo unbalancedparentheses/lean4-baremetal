@@ -356,8 +356,22 @@ lean_object *lean_string_append(lean_object *s1, lean_object *s2)
     size_t sz2 = lean_string_size(s2) - 1;
     size_t len1 = lean_string_len(s1);
     size_t len2 = lean_string_len(s2);
-
     size_t total_sz = sz1 + sz2;
+
+    /* Fast path: if s1 is exclusive and has enough capacity, extend in place */
+    if (lean_is_exclusive(s1)) {
+        lean_string_object *str1 = (lean_string_object *)s1;
+        if (str1->m_capacity >= total_sz + 1) {
+            char *data = lean_string_cstr(s1);
+            memcpy(data + sz1, lean_string_cstr(s2), sz2);
+            data[total_sz] = '\0';
+            str1->m_size = total_sz + 1;
+            str1->m_length = len1 + len2;
+            lean_dec(s2);
+            return s1;
+        }
+    }
+
     size_t alloc_sz = sizeof(lean_string_object) + total_sz + 1;
     lean_object *o = lean_alloc_object(alloc_sz);
     o->m_tag = LeanString;
@@ -563,7 +577,6 @@ lean_object *lean_string_data(lean_object *s)
 {
     /* Convert String to List Char */
     const uint8_t *data = (const uint8_t *)lean_string_cstr(s);
-    size_t sz = lean_string_size(s) - 1;
 
     /* Build list in reverse, then reverse */
     lean_object *list = lean_box(0);  /* Nil */
@@ -793,7 +806,10 @@ lean_object *lean_cstr_to_nat(const char *s)
 {
     size_t n = 0;
     while (*s >= '0' && *s <= '9') {
+        size_t prev = n;
         n = n * 10 + (size_t)(*s - '0');
+        if (n < prev)
+            lean_internal_panic("lean_cstr_to_nat: overflow");
         s++;
     }
     return lean_box(n);
@@ -999,8 +1015,15 @@ static lean_object *stream_flush_impl(lean_object *w) {
 
 static lean_object *stream_read_impl(lean_object *n, lean_object *w) {
     (void)n; (void)w;
-    /* Return empty byte array stub */
-    return lean_io_result_mk_ok(lean_box(0));
+    /* Return empty ByteArray (proper sarray, not boxed 0) */
+    size_t sz = sizeof(lean_sarray_object);
+    lean_object *o = lean_alloc_object(sz);
+    o->m_tag = LeanScalarArray;
+    o->m_other = 0;
+    lean_sarray_object *a = (lean_sarray_object *)o;
+    a->m_size = 0;
+    a->m_capacity = 0;
+    return lean_io_result_mk_ok(o);
 }
 
 static lean_object *stream_write_impl(lean_object *data, lean_object *w) {
@@ -1334,12 +1357,13 @@ lean_object *lean_thunk_get_core(lean_object *t)
 {
     lean_thunk_object *th = (lean_thunk_object *)t;
     if (th->m_value == (lean_object *)0) {
-        /* Force the thunk */
+        /* Force the thunk: lean_apply_1 returns val with rc=1,
+         * which becomes the thunk's owning reference.
+         * lean_thunk_get adds its own lean_inc for the caller. */
         lean_object *c = th->m_closure;
         lean_inc(c);
         lean_object *val = lean_apply_1(c, lean_box(0));
         th->m_value = val;
-        lean_inc(val);
         lean_dec(th->m_closure);
         th->m_closure = (lean_object *)0;
     }
@@ -1435,7 +1459,7 @@ lean_object *lean_byte_array_push(lean_object *a, uint8_t b)
         na->m_size = sa->m_size;
         na->m_capacity = new_cap;
         memcpy((char *)o + sizeof(lean_sarray_object), data, sa->m_size);
-        free(a);
+        lean_free_object(a);
         a = o;
         data = (uint8_t *)((char *)a + sizeof(lean_sarray_object));
         sa = (lean_sarray_object *)a;

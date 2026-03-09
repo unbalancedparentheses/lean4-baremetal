@@ -45,6 +45,13 @@ struct lean_object {
 
 /* ---- Constructor objects ---- */
 
+/* TODO: The official Lean 4 runtime has no m_num_objs here — the ctor is just
+ * the header followed immediately by object pointer slots and scalar data.
+ * We keep m_num_objs because removing it currently breaks init-time string
+ * operations (the extra 8 bytes shift lean_ctor_obj_cptr, and all internal
+ * sizeof(lean_ctor_object) calculations are consistent with it present).
+ * Removing it is the right long-term fix but requires auditing every
+ * allocation size path. Wastes 8 bytes per constructor object. */
 typedef struct {
     lean_object m_header;
     size_t      m_num_objs;
@@ -399,10 +406,13 @@ void lean_internal_panic_out_of_memory(void) __attribute__((noreturn));
 void lean_internal_panic_rc_overflow(void) __attribute__((noreturn));
 
 /* Initialization */
+/* Note: the Lean C code generator emits `void lean_initialize_runtime_module()`
+ * in generated code, so we must match that signature here. */
 void lean_initialize_runtime_module(void);
 void lean_io_mark_end_initialization(void);
 char **lean_setup_args(int argc, char **argv);
 void lean_set_panic_messages(uint8_t flag);
+/* Note: same as lean_initialize_runtime_module — generated code says void. */
 void lean_init_task_manager(void);
 void lean_finalize_task_manager(void);
 
