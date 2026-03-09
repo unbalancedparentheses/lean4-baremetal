@@ -4,9 +4,10 @@ Lean 4 on bare-metal RISC-V. No OS, no libc, no runtime dependencies.
 
 Lean compiles to C, but the standard runtime pulls in glibc, GMP, pthreads, libuv, and C++ exceptions. We wrote a freestanding replacement (~1000 lines of C) so Lean programs can run directly on hardware.
 
-Two verified examples so far:
+Three verified examples so far:
 - **SHA-256** — proven correct end-to-end: `sha256 msg = spec_sha256 msg` for all inputs
 - **CAN 2.0 frame parser** — MCP2515 CAN controller buffer parser with CRC-15, with verified bit extraction, structural bounds, test vectors, and roundtrip: `parseMcp2515 (encodeMcp2515 f) = f` for well-formed frames
+- **Torque-enable gate** — automotive drive-authority gate that processes CAN frames to decide whether an electric motor may produce torque. Formally proven: torque is never granted unless all safety conditions hold, faults latch and persist, and there is no backdoor past the enable request
 
 Both are checked by the Lean kernel. The proofs apply to the same code that compiles to C and runs on the machine.
 
@@ -17,8 +18,9 @@ nix develop
 make nix-run                    # hello world on bare-metal RISC-V
 make EXAMPLE=sha256 nix-run     # SHA-256 on bare-metal
 make EXAMPLE=can nix-run        # CAN 2.0 frame parser on bare-metal
+make EXAMPLE=torque nix-run     # torque-enable gate on bare-metal
 make nix-verify                 # typecheck all formal proofs
-make nix-test                   # build + run + check output
+make nix-test                   # build + run + check all 7 examples
 ```
 
 ## How it works
@@ -35,7 +37,7 @@ examples/sha256.lean              Lean source
 
 Lean's compiler emits C. We cross-compile that C together with our freestanding runtime for RISC-V. QEMU runs the resulting ELF directly — no BIOS, no bootloader, no OS. The binary starts at `platform/boot.S`, which sets up a stack and jumps to the Lean-generated `main`, which initializes the runtime and calls Lean's entry point.
 
-The important part: the proofs in `sha256_proof.lean` and `can_proof.lean` import their respective implementation files via Lake. So the code the Lean kernel checks is the same code that gets compiled to C and runs on the machine. There is one source of truth.
+The important part: the proofs in `sha256_proof.lean`, `can_proof.lean`, and `torque_proof.lean` import their respective implementation files via Lake. So the code the Lean kernel checks is the same code that gets compiled to C and runs on the machine. There is one source of truth.
 
 ## Project structure
 
@@ -103,6 +105,22 @@ The proofs cover:
 
 The CAN example exercises different runtime features than SHA-256: custom Lean structures with scalar fields (UInt32, Bool, UInt8), constructor object layout, and string interpolation. This helped uncover and fix a bug in the runtime's scalar field accessors.
 
+## Torque-enable gate proofs
+
+`torque_proof.lean` verifies an automotive torque-enable / drive-authority gate. The gate reads a CAN frame with bit-packed safety inputs (brake, gear position, motor temperature, battery status, emergency stop) and a driver enable request, then decides whether an electric motor may produce torque. This is a safety-critical decision — the proofs guarantee the gate never allows torque when conditions are unsafe.
+
+The key safety properties, all universally quantified:
+
+- **Torque implies safety** — if torque is granted, every safety input was true and no fault was latched. This is the critical invariant.
+- **Fault denial** — a faulted system never grants torque, regardless of inputs
+- **No backdoor** — torque always requires an explicit enable request from the driver
+- **Fault latching** — any safety violation immediately latches a persistent fault
+- **Fault persistence** — once latched, a fault survives across CAN cycles until explicitly reset
+
+Additional proofs cover bit extraction correctness (each CAN byte bit maps to the right DriveInputs field via `bv_decide`), 5 concrete test vectors via `native_decide`, output consistency (torque_allowed ↔ drive_enabled, reason `.ok` ↔ torque granted), and an end-to-end theorem connecting raw CAN buffers to safety guarantees.
+
+The torque gate is the first example that imports another verified module (`can_lib`), demonstrating composable verified subsystems.
+
 ### Trust model
 
 This follows the same approach as [HACL\*](https://hacl-star.github.io/) (F\*) and [Fiat-Crypto](https://github.com/mit-plv/fiat-crypto) (Coq). What you have to trust: the Lean 4 kernel, the Lean-to-C compiler, GCC's cross-compilation, and our freestanding runtime. What's proven: end-to-end functional correctness for SHA-256, plus strong parser/roundtrip/CRC properties for the CAN example.
@@ -113,10 +131,10 @@ This follows the same approach as [HACL\*](https://hacl-star.github.io/) (F\*) a
 - [x] Freestanding runtime replaces libc, allocator, thread, and I/O dependencies
 - [x] SHA-256 is proved end-to-end against an independent reference spec
 - [x] CAN 2.0 frame parser proved correct (roundtrip, bit extraction, CRC-15)
+- [x] Torque-enable gate proved safe (torque → all conditions, fault latching, no backdoor)
 - [x] `platform/` vs `runtime/` split — clean porting boundary
 - [x] `make nix-test` and `make nix-verify` work as the main validation path
 - [ ] Reusable proof libraries for bitfield extraction, bounded arrays, packet encoding
-- [ ] A third verified example that reuses those libraries
 - [ ] Real hardware support
 
 ## Known runtime issues / next C fixes
@@ -158,8 +176,11 @@ examples/
   hello.lean          Hello world
   sha256.lean         SHA-256 implementation (FIPS 180-4)
   sha256_proof.lean   Formal proofs (~70 theorems, imports sha256.lean)
-  can.lean            CAN 2.0 frame parser (MCP2515, CRC-15)
+  can_lib.lean        CAN 2.0 library (types, parser, encoder, CRC-15)
+  can.lean            CAN 2.0 bare-metal entry point (imports can_lib)
   can_proof.lean      Formal proofs (roundtrip, bit extraction, test vectors)
+  torque.lean         Torque-enable gate (imports can_lib)
+  torque_proof.lean   Formal proofs (safety invariants, fault latching, capstone)
   alloc_stress.lean   Allocator stress test
   io_error.lean       IO error handling test
   runtime_test.lean   Runtime feature coverage test
@@ -171,12 +192,12 @@ RISC-V 64-bit on QEMU `virt`. Open ISA, great tooling. Everything you need is pr
 
 ## Next proof targets
 
-The SHA-256 end-to-end theorem is done. The next proof work is platform-oriented:
+Three verified subsystems are done (SHA-256, CAN parser, torque gate). The next proof work is platform-oriented:
 
 1. **Strengthen CAN proofs** — keep pushing the CAN example toward a cleaner independent spec and reusable bridge lemmas
 2. **Extract reusable proof libraries** — bitfield extraction, bounded array access, encoder/decoder roundtrip, and policy/state-machine utilities
-3. **Third verified subsystem** — build a verified automotive torque-enable / drive-authority gate fed by validated CAN messages
-4. **Finance follow-on** — after the automotive gate, reuse the same policy/state proof machinery for a hardware-near pre-trade risk / order admission gate
+3. **Finance follow-on** — reuse the policy/state proof machinery from the torque gate for a hardware-near pre-trade risk / order admission gate
+4. **Real hardware** — port from QEMU virt to a physical RISC-V board
 
 The goal is a platform proof story, not just isolated verified programs.
 
