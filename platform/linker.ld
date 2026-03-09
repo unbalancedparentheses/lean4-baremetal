@@ -1,11 +1,20 @@
 /* linker.ld — Memory layout for QEMU virt machine (RISC-V 64-bit)
  *
  * QEMU virt RAM starts at 0x80000000.
- * We place code at the start, then data, then BSS, then a 64KB stack.
+ * We place code at the start, then data, then BSS, then heap and stack.
+ *
+ * Program headers separate code (RX) from data (RW) to avoid
+ * the "LOAD segment with RWX permissions" linker warning.
  */
 
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
+
+PHDRS
+{
+    text PT_LOAD FLAGS(5);   /* PF_R | PF_X */
+    data PT_LOAD FLAGS(6);   /* PF_R | PF_W */
+}
 
 MEMORY
 {
@@ -19,22 +28,22 @@ SECTIONS
     .text : {
         *(.text.boot)
         *(.text .text.*)
-    } > RAM
+    } > RAM :text
 
     .rodata : {
         *(.rodata .rodata.*)
-    } > RAM
+    } > RAM :text
 
     .data : {
         *(.data .data.*)
-    } > RAM
+    } > RAM :data
 
     . = ALIGN(8);
     _bss_start = .;
     .bss : {
         *(.bss .bss.*)
         *(COMMON)
-    } > RAM
+    } > RAM :data
     . = ALIGN(8);
     _bss_end = .;
 

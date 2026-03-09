@@ -127,7 +127,7 @@ $(BUILDDIR)/%.o: platform/%.c | $(BUILDDIR)
 # Compile Lean-generated C (main example + any dependencies)
 $(BUILDDIR)/%_lean.o: $(BUILDDIR)/%.c runtime/lean_rt.h | $(BUILDDIR)
 	@echo "  CC      $< (lean-generated)"
-	$(CROSS_CC) $(CFLAGS) -Wno-unused-function -Wno-missing-field-initializers -c $< -o $@
+	$(CROSS_CC) $(CFLAGS) -Wno-unused-function -Wno-unused-variable -Wno-missing-field-initializers -c $< -o $@
 
 # Link
 $(KERNEL): $(ALL_OBJS)
