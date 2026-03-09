@@ -35,6 +35,9 @@ BUILDDIR  := build
 # Example selection (override with: make EXAMPLE=sha256)
 EXAMPLE   ?= hello
 
+# Examples that import project modules and need lake for LEAN_PATH
+LAKE_EXAMPLES := can torque
+
 # Sources
 LEAN_SRC  := examples/$(EXAMPLE).lean
 LEAN_C    := $(BUILDDIR)/$(EXAMPLE).c
@@ -54,7 +57,7 @@ ALL_OBJS  := $(ASM_OBJ) $(C_OBJS) $(LEAN_OBJ)
 # Output (example-specific to avoid stale cross-example artifacts)
 KERNEL    := $(BUILDDIR)/$(EXAMPLE).elf
 
-.PHONY: all clean run lean-c objdump verify test help \
+.PHONY: all clean run lean-c objdump verify test help lake-deps \
 	        nix-build nix-run nix-clean nix-verify nix-test
 
 # ---- Nix wrappers (run everything inside nix develop) ----
@@ -80,12 +83,23 @@ nix-test:
 
 all: $(KERNEL)
 
-# Compile Lean to C
+# Build lake library dependencies (for examples that import project modules).
+# Fast no-op when already built.
+lake-deps:
+	@lake build can_lib >/dev/null 2>&1
+
+# Compile Lean to C.  Examples that import project modules (can, torque)
+# need lake's LEAN_PATH so the compiler can find .olean files.
 lean-c: $(LEAN_C)
 
 $(LEAN_C): $(LEAN_SRC) | $(BUILDDIR)
 	@echo "  LEAN    $< -> $@"
-	$(LEAN) $< -c $@
+	@if echo "$(LAKE_EXAMPLES)" | grep -qw "$(EXAMPLE)"; then \
+		$(MAKE) --no-print-directory lake-deps; \
+		lake env $(LEAN) $< -c $@; \
+	else \
+		$(LEAN) $< -c $@; \
+	fi
 
 # Compile assembly
 $(ASM_OBJ): $(ASM_SRC) | $(BUILDDIR)
@@ -135,79 +149,44 @@ else \
 fi
 endef
 
+# run_test: build example, run on QEMU, grep for expected output
+# $(1) = example name, $(2) = grep pattern
+define run_test
+@$(MAKE) --no-print-directory EXAMPLE=$(1) all
+@echo "  TEST    $(1)"
+@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/$(1).elf)); \
+if echo "$$output" | grep -q $(2); then \
+	echo "  PASS    $(1)"; \
+else \
+	echo "  FAIL    $(1)"; echo "$$output"; exit 1; \
+fi
+endef
+
 run: $(KERNEL)
 	@echo "  QEMU    $(KERNEL)"
 	@echo "  (Press Ctrl-A X to exit QEMU)"
 	$(QEMU) $(QEMUFLAGS) -kernel $(KERNEL)
 
-# Formal verification: sha256_proof imports sha256 via lake.
-# If sha256.lean changes and breaks a proof, this fails.
+# Formal verification: proof libs import the implementation via lake.
+# If the implementation changes and breaks a proof, this fails.
 verify:
-	@echo "  VERIFY  examples/sha256_proof.lean (via lake build)"
-	lake build sha256_proof
-	@echo "  VERIFY  examples/can_proof.lean (via lake build)"
-	lake build can_proof
-	@echo "  VERIFY  examples/torque_proof.lean (via lake build)"
-	lake build torque_proof
+	@echo "  VERIFY  sha256_proof"
+	@lake build sha256_proof
+	@echo "  VERIFY  can_proof"
+	@lake build can_proof
+	@echo "  VERIFY  torque_proof"
+	@lake build torque_proof
+	@echo "  ALL PROOFS VERIFIED"
 
-# Automated test: build, run on QEMU, check expected output
+# Automated test: build each example, run on QEMU, check expected output
 test:
-	@echo "  TEST    hello"
-	@$(MAKE) --no-print-directory EXAMPLE=hello all
-	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/hello.elf)); \
-	if echo "$$output" | grep -q "Hello from bare-metal Lean!"; then \
-		echo "  PASS    hello"; \
-	else \
-		echo "  FAIL    hello"; echo "$$output"; exit 1; \
-	fi
-	@$(MAKE) --no-print-directory EXAMPLE=sha256 all
-	@echo "  TEST    sha256"
-	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/sha256.elf)); \
-	if echo "$$output" | grep -q "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"; then \
-		echo "  PASS    sha256"; \
-	else \
-		echo "  FAIL    sha256"; echo "$$output"; exit 1; \
-	fi
-	@$(MAKE) --no-print-directory EXAMPLE=alloc_stress all
-	@echo "  TEST    alloc_stress"
-	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/alloc_stress.elf)); \
-	if echo "$$output" | grep -q "alloc-stress ok"; then \
-		echo "  PASS    alloc_stress"; \
-	else \
-		echo "  FAIL    alloc_stress"; echo "$$output"; exit 1; \
-	fi
-	@$(MAKE) --no-print-directory EXAMPLE=io_error all
-	@echo "  TEST    io_error"
-	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/io_error.elf)); \
-	if echo "$$output" | grep -q "\\[lean\\] IO error: expected runtime error"; then \
-		echo "  PASS    io_error"; \
-	else \
-		echo "  FAIL    io_error"; echo "$$output"; exit 1; \
-	fi
-	@$(MAKE) --no-print-directory EXAMPLE=can all
-	@echo "  TEST    can"
-	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/can.elf)); \
-	if echo "$$output" | grep -q "CRC-15" && echo "$$output" | grep -q "059e"; then \
-		echo "  PASS    can"; \
-	else \
-		echo "  FAIL    can"; echo "$$output"; exit 1; \
-	fi
-	@$(MAKE) --no-print-directory EXAMPLE=torque all
-	@echo "  TEST    torque"
-	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/torque.elf)); \
-	if echo "$$output" | grep -q "torque-gate ok"; then \
-		echo "  PASS    torque"; \
-	else \
-		echo "  FAIL    torque"; echo "$$output"; exit 1; \
-	fi
-	@$(MAKE) --no-print-directory EXAMPLE=runtime_test all
-	@echo "  TEST    runtime_test"
-	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/runtime_test.elf)); \
-	if echo "$$output" | grep -q "runtime-test ok"; then \
-		echo "  PASS    runtime_test"; \
-	else \
-		echo "  FAIL    runtime_test"; echo "$$output"; exit 1; \
-	fi
+	$(call run_test,hello,"Hello from bare-metal Lean!")
+	$(call run_test,sha256,"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	$(call run_test,alloc_stress,"alloc-stress ok")
+	$(call run_test,io_error,"IO error: expected runtime error")
+	$(call run_test,can,"059e")
+	$(call run_test,torque,"torque-gate ok")
+	$(call run_test,runtime_test,"runtime-test ok")
 	@echo "  ALL TESTS PASSED"
 
 # ---- Utilities ----
@@ -222,13 +201,13 @@ clean:
 	rm -rf $(BUILDDIR) .lake
 
 help:
-	@echo "Usage: make [TARGET] [EXAMPLE=hello|sha256]"
+	@echo "Usage: make [TARGET] [EXAMPLE=name]"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  all          Build kernel ELF (default)"
 	@echo "  run          Build and run on QEMU"
-	@echo "  test         Build both examples, run, check expected output"
-	@echo "  verify       Typecheck formal proofs via lake"
+	@echo "  test         Build all examples, run, check expected output"
+	@echo "  verify       Typecheck all formal proofs via lake"
 	@echo "  lean-c       Compile Lean to C only"
 	@echo "  objdump      Disassemble kernel ELF"
 	@echo "  clean        Remove build artifacts"
@@ -240,10 +219,8 @@ help:
 	@echo "  nix-verify   make verify inside nix develop"
 	@echo "  nix-clean    make clean inside nix develop"
 	@echo ""
-	@echo "Examples:"
-	@echo "  make nix-run                   # build and run hello (default)"
-	@echo "  make EXAMPLE=sha256 nix-run    # build and run sha256"
-	@echo "  make EXAMPLE=alloc_stress nix-run"
-	@echo "  make EXAMPLE=io_error nix-run"
-	@echo "  make nix-test                  # run all tests"
-	@echo "  make nix-verify                # check formal proofs"
+	@echo "Examples: hello sha256 alloc_stress io_error can torque runtime_test"
+	@echo ""
+	@echo "  make EXAMPLE=torque nix-run     # build and run torque gate"
+	@echo "  make nix-test                   # run all tests"
+	@echo "  make nix-verify                 # check formal proofs"
