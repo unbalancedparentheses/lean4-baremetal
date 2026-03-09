@@ -19,7 +19,7 @@ make EXAMPLE=sha256 run         # SHA-256 with benchmarks
 make EXAMPLE=can run            # CAN 2.0 frame parser
 make EXAMPLE=torque run         # torque-enable gate
 make verify                     # typecheck all formal proofs
-make test                       # build + run + check all examples
+make test                       # build + run + check all runnable examples and runtime tests
 ```
 
 Requires [Nix](https://nixos.org/). `make` auto-delegates to Nix builds.
@@ -111,7 +111,7 @@ The key safety properties, all universally quantified:
 - **No backdoor** — torque always requires an explicit enable request from the driver
 - **Fault latching** — any safety violation immediately latches a persistent fault
 - **Fault persistence** — once latched, a fault survives across CAN cycles until explicitly reset
-- **Frame admissibility** — inadmissible frames (wrong CAN ID, RTR, oversized DLC) are always denied and leave state unchanged; torque authorization requires an admissible frame
+- **Frame admissibility** — inadmissible frames (wrong CAN ID, extended/RTR frame type, or short DLC) are always denied and leave state unchanged; torque authorization requires an admissible frame
 
 Additional proofs cover bit extraction correctness (each CAN byte bit maps to the right DriveInputs field via `bv_decide`), 7 concrete test vectors via `native_decide`, and output consistency (torque_allowed ↔ drive_enabled, reason `.ok` ↔ torque granted).
 
@@ -196,3 +196,4 @@ RISC-V 64-bit on QEMU `virt`. Open ISA, great tooling. Everything you need is pr
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md).
+Near-term direction: finish the automotive authority-gate path, then apply the same verified policy pattern to a hardware-near finance order admission / pre-trade risk gate.
