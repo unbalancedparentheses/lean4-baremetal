@@ -218,52 +218,56 @@ static inline void lean_ctor_set_usize(lean_object *o, unsigned i, size_t v) {
     ((size_t *)lean_ctor_scalar_cptr(o))[i] = v;
 }
 
+/* Scalar field access — offsets are relative to lean_ctor_obj_cptr(o),
+ * matching the official Lean 4 runtime and the lean -c code generator.
+ * The generated code computes offsets as sizeof(void*)*num_obj_fields + byte_pos. */
+
 static inline uint8_t lean_ctor_get_uint8(lean_object *o, unsigned off) {
-    return lean_ctor_scalar_cptr(o)[off];
+    return ((uint8_t *)lean_ctor_obj_cptr(o))[off];
 }
 
 static inline void lean_ctor_set_uint8(lean_object *o, unsigned off, uint8_t v) {
-    lean_ctor_scalar_cptr(o)[off] = v;
+    ((uint8_t *)lean_ctor_obj_cptr(o))[off] = v;
 }
 
 static inline uint16_t lean_ctor_get_uint16(lean_object *o, unsigned off) {
     uint16_t r;
-    __builtin_memcpy(&r, lean_ctor_scalar_cptr(o) + off, 2);
+    __builtin_memcpy(&r, (uint8_t *)lean_ctor_obj_cptr(o) + off, 2);
     return r;
 }
 
 static inline void lean_ctor_set_uint16(lean_object *o, unsigned off, uint16_t v) {
-    __builtin_memcpy(lean_ctor_scalar_cptr(o) + off, &v, 2);
+    __builtin_memcpy((uint8_t *)lean_ctor_obj_cptr(o) + off, &v, 2);
 }
 
 static inline uint32_t lean_ctor_get_uint32(lean_object *o, unsigned off) {
     uint32_t r;
-    __builtin_memcpy(&r, lean_ctor_scalar_cptr(o) + off, 4);
+    __builtin_memcpy(&r, (uint8_t *)lean_ctor_obj_cptr(o) + off, 4);
     return r;
 }
 
 static inline void lean_ctor_set_uint32(lean_object *o, unsigned off, uint32_t v) {
-    __builtin_memcpy(lean_ctor_scalar_cptr(o) + off, &v, 4);
+    __builtin_memcpy((uint8_t *)lean_ctor_obj_cptr(o) + off, &v, 4);
 }
 
 static inline uint64_t lean_ctor_get_uint64(lean_object *o, unsigned off) {
     uint64_t r;
-    __builtin_memcpy(&r, lean_ctor_scalar_cptr(o) + off, 8);
+    __builtin_memcpy(&r, (uint8_t *)lean_ctor_obj_cptr(o) + off, 8);
     return r;
 }
 
 static inline void lean_ctor_set_uint64(lean_object *o, unsigned off, uint64_t v) {
-    __builtin_memcpy(lean_ctor_scalar_cptr(o) + off, &v, 8);
+    __builtin_memcpy((uint8_t *)lean_ctor_obj_cptr(o) + off, &v, 8);
 }
 
 static inline double lean_ctor_get_float(lean_object *o, unsigned off) {
     double r;
-    __builtin_memcpy(&r, lean_ctor_scalar_cptr(o) + off, 8);
+    __builtin_memcpy(&r, (uint8_t *)lean_ctor_obj_cptr(o) + off, 8);
     return r;
 }
 
 static inline void lean_ctor_set_float(lean_object *o, unsigned off, double v) {
-    __builtin_memcpy(lean_ctor_scalar_cptr(o) + off, &v, 8);
+    __builtin_memcpy((uint8_t *)lean_ctor_obj_cptr(o) + off, &v, 8);
 }
 
 /* ---- Closure field access (inline) ---- */

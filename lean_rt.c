@@ -357,9 +357,6 @@ lean_object *lean_string_append(lean_object *s1, lean_object *s2)
     size_t len1 = lean_string_len(s1);
     size_t len2 = lean_string_len(s2);
 
-    lean_object *r = lean_mk_string_unchecked("", 0, 0);
-    lean_free_object(r);
-
     size_t total_sz = sz1 + sz2;
     size_t alloc_sz = sizeof(lean_string_object) + total_sz + 1;
     lean_object *o = lean_alloc_object(alloc_sz);
@@ -770,6 +767,27 @@ lean_object *lean_unsigned_to_nat(size_t n)
     /* If it fits in a scalar (which on 64-bit is ~2^63 values), box it */
     return lean_box(n);
 }
+
+/* ========================================================================
+ * UInt16 operations
+ *
+ * Lean's generated C code calls these for UInt16 arithmetic.
+ * On 64-bit, UInt16 values are boxed as scalars (like UInt8/UInt32).
+ * ======================================================================== */
+
+uint16_t lean_uint16_of_nat(lean_object *n) { return (uint16_t)lean_unbox(n); }
+uint16_t lean_uint8_to_uint16(uint8_t a) { return (uint16_t)a; }
+uint8_t lean_uint16_to_uint8(uint16_t a) { return (uint8_t)a; }
+uint16_t lean_uint16_shift_right(uint16_t a, uint16_t b) { return a >> b; }
+uint16_t lean_uint16_shift_left(uint16_t a, uint16_t b) { return (uint16_t)(a << b); }
+uint16_t lean_uint16_xor(uint16_t a, uint16_t b) { return a ^ b; }
+uint16_t lean_uint16_land(uint16_t a, uint16_t b) { return a & b; }
+uint16_t lean_uint16_lor(uint16_t a, uint16_t b) { return a | b; }
+uint8_t lean_uint16_dec_eq(uint16_t a, uint16_t b) { return a == b; }
+uint8_t lean_uint16_dec_lt(uint16_t a, uint16_t b) { return a < b; }
+uint8_t lean_uint16_dec_le(uint16_t a, uint16_t b) { return a <= b; }
+lean_object *lean_box_uint16(uint16_t v) { return lean_box((size_t)v); }
+uint16_t lean_unbox_uint16(lean_object *o) { return (uint16_t)lean_unbox(o); }
 
 lean_object *lean_cstr_to_nat(const char *s)
 {

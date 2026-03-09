@@ -140,6 +140,8 @@ run: $(KERNEL)
 verify:
 	@echo "  VERIFY  examples/sha256_proof.lean (via lake build)"
 	lake build sha256_proof
+	@echo "  VERIFY  examples/can_proof.lean (via lake build)"
+	lake build can_proof
 
 # Automated test: build, run on QEMU, check expected output
 test:
@@ -174,6 +176,14 @@ test:
 		echo "  PASS    io_error"; \
 	else \
 		echo "  FAIL    io_error"; echo "$$output"; exit 1; \
+	fi
+	@$(MAKE) --no-print-directory EXAMPLE=can all
+	@echo "  TEST    can"
+	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/can.elf)); \
+	if echo "$$output" | grep -q "CRC-15" && echo "$$output" | grep -q "059e"; then \
+		echo "  PASS    can"; \
+	else \
+		echo "  FAIL    can"; echo "$$output"; exit 1; \
 	fi
 	@echo "  ALL TESTS PASSED"
 
