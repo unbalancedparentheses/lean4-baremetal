@@ -109,8 +109,16 @@ This follows the same approach as [HACL\*](https://hacl-star.github.io/) (F\*) a
 
 ## Known runtime issues / next C fixes
 
-The freestanding runtime is working well enough to support two nontrivial verified examples, but there are still a few concrete C/runtime issues worth fixing next:
+Recently fixed:
+- `main.c` signature aligned with boot.S (`int main(int argc, char **argv)`)
+- `malloc` overflow check before `sz + 16`
+- `lean_string_data` UTF-8 bounds checks for truncated multi-byte sequences
+- `lean_string_mk` list traversal guards against dereferencing scalar Nil
+- ST ref functions updated for Lean 4.28's world-token-elided calling convention
+- Redundant `uart_init()` removed from `lean_initialize_runtime_module`
+- Added missing `lean_byte_array_size` and `lean_byte_array_get`
 
+Remaining issues:
 - `main.c` still treats `lean_initialize_runtime_module` and `lean_init_task_manager` as if they returned `IO` results, even though they are declared `void` in the runtime interface. This is undefined behavior and only works accidentally.
 - `lean_thunk_get_core` has a ref-count leak: it increments the computed value after storing it in the thunk, which leaves one extra reference alive.
 - `lean_byte_array_push` uses `free(a)` directly instead of `lean_free_object(a)`, which is inconsistent with the rest of the runtime and would break if allocator bookkeeping changes.
@@ -118,7 +126,6 @@ The freestanding runtime is working well enough to support two nontrivial verifi
 - `IO.FS.Stream.read` currently returns `lean_box(0)` instead of an empty `ByteArray`, which would be a type confusion bug if that path were exercised.
 - `lean_string_append` always allocates; adding an in-place fast path for exclusive strings would reduce allocation pressure noticeably.
 - `lean_cstr_to_nat` should detect overflow and panic rather than silently wrapping huge numeric literals.
-- `main.c` is declared as `int main(void)` even though `boot.S` initializes `a0/a1` as `argc/argv`; the signature should be aligned.
 
 ## Files
 
