@@ -27,7 +27,7 @@ Requires [Nix](https://nixos.org/). `make` auto-delegates to Nix builds.
 ## How it works
 
 ```
-examples/sha256.lean              Lean source
+sha256/sha256.lean                Lean source
         |  lean -c
    build/sha256.c                 generated C
         |  riscv64-gcc -ffreestanding -nostdlib
@@ -38,7 +38,7 @@ examples/sha256.lean              Lean source
 
 Lean's compiler emits C. We cross-compile that C together with our freestanding runtime for RISC-V. QEMU runs the resulting ELF directly — no BIOS, no bootloader, no OS. The binary starts at `platform/boot.S`, which sets up a stack and jumps to C `main`, which initializes the runtime and calls Lean's entry point.
 
-The important part: the proofs in `sha256_proof.lean`, `can_proof.lean`, and `torque_proof.lean` import their respective implementation files via Lake. So the code the Lean kernel checks is the same code that gets compiled to C and runs on the machine. There is one source of truth.
+The important part: the proofs in `sha256/sha256_proof.lean`, `can/can_proof.lean`, and `torque/torque_proof.lean` import their respective implementation files via Lake. So the code the Lean kernel checks is the same code that gets compiled to C and runs on the machine. There is one source of truth.
 
 ## Trust model
 
@@ -138,11 +138,17 @@ The slab allocator deserves a note. Lean's runtime allocates and frees small obj
 
 ## Project structure
 
-The C/asm code is split into two directories by role:
+The project is organized by role:
 
 - **`platform/`** — Hardware-specific code that changes per board: boot sequence, linker script, board config, UART driver. To port to new hardware, you replace or add files here. Nothing in `platform/` knows about Lean's object model.
 
 - **`runtime/`** — Lean freestanding runtime that is board-independent: the slab allocator, refcounting, string/array operations, libc stubs, and the `lean/lean.h` shim. This code implements the interface that Lean's generated C expects. It talks to hardware only through `platform/` headers (`uart.h`, `board.h`).
+
+- **`sha256/`**, **`can/`**, **`torque/`** — Verified subsystems. Each directory contains the implementation and its formal proofs.
+
+- **`lib/`** — Shared proof libraries used across subsystems.
+
+- **`test/`** — Test and demo programs (hello world, allocator stress test, IO error handling, runtime coverage).
 
 This separation means porting to a new board is a `platform/`-only change, and runtime bug fixes don't touch hardware code.
 
@@ -160,21 +166,25 @@ runtime/
   main.c              C entry: init UART, init Lean runtime, call Lean main
   sha256_ref.c        C reference SHA-256 for benchmarking (FIPS 180-4)
   lean/lean.h         Shim header replacing <lean/lean.h> for freestanding builds
-lakefile.lean         Lake build config (proof file imports implementation)
-flake.nix             Nix flake for reproducible builds
-examples/
-  hello.lean          Hello world
+sha256/
   sha256.lean         SHA-256 implementation (FIPS 180-4) with benchmarks
   sha256_proof.lean   Formal proofs (72 theorems, imports sha256.lean)
-  bitfield.lean       Reusable UInt8 bit isolation lemmas (shared proof library)
+can/
   can_lib.lean        CAN 2.0 library (types, parser, encoder, CRC-15)
   can.lean            CAN 2.0 bare-metal entry point (imports can_lib)
   can_proof.lean      Formal proofs (59 theorems: roundtrip, bit extraction, test vectors)
+torque/
   torque.lean         Torque-enable gate (imports can_lib)
   torque_proof.lean   Formal proofs (28 theorems: safety invariants, fault latching, admissibility)
+lib/
+  bitfield.lean       Reusable UInt8 bit isolation lemmas (shared proof library)
+test/
+  hello.lean          Hello world
   alloc_stress.lean   Allocator stress test
   io_error.lean       IO error handling test
   runtime_test.lean   Runtime feature coverage test
+lakefile.lean         Lake build config (proof file imports implementation)
+flake.nix             Nix flake for reproducible builds
 ```
 
 ## Target

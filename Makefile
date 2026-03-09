@@ -1,7 +1,7 @@
 # Makefile — Build system for lean4-baremetal
 #
 # Pipeline:
-#   1. lean examples/$(EXAMPLE).lean -c build/$(EXAMPLE).c    (Lean → C)
+#   1. lean <srcdir>/$(EXAMPLE).lean -c build/$(EXAMPLE).c     (Lean → C)
 #   2. riscv64 cross-compile all C + assembly                  (C → ELF)
 #   3. qemu-system-riscv64 runs the binary                     (ELF → bare-metal)
 
@@ -41,18 +41,27 @@ LAKE_EXAMPLES := can torque
 LEAN_DEPS_can     := can_lib
 LEAN_DEPS_torque  := can_lib
 
+# Source directory mapping (per example)
+SRCDIR_sha256       := sha256
+SRCDIR_can          := can
+SRCDIR_torque       := torque
+SRCDIR_hello        := test
+SRCDIR_alloc_stress := test
+SRCDIR_io_error     := test
+SRCDIR_runtime_test := test
+
 # Sources
-LEAN_SRC  := examples/$(EXAMPLE).lean
+LEAN_SRC  := $(SRCDIR_$(EXAMPLE))/$(EXAMPLE).lean
 LEAN_C    := $(BUILDDIR)/$(EXAMPLE).c
 
 ASM_SRC   := platform/boot.S
 C_SRCS    := runtime/lean_rt.c platform/uart.c runtime/libc_min.c
-C_SRCS    += platform/board.c
+C_SRCS    += platform/board.c runtime/sha256_ref.c
 
 # Object files
 ASM_OBJ   := $(BUILDDIR)/boot.o
 C_OBJS    := $(BUILDDIR)/lean_rt.o $(BUILDDIR)/uart.o $(BUILDDIR)/libc_min.o \
-             $(BUILDDIR)/board.o
+             $(BUILDDIR)/board.o $(BUILDDIR)/sha256_ref.o
 LEAN_OBJ  := $(BUILDDIR)/$(EXAMPLE)_lean.o
 
 # Dependency objects (empty for standalone examples, populated for lake examples)

@@ -46,7 +46,8 @@ inductive ReasonCode where
   | overTemp     : ReasonCode   -- motor over temperature
   | batteryFault : ReasonCode   -- battery fault
   | estopActive  : ReasonCode   -- emergency stop active
-  | faultLatched : ReasonCode   -- previous fault still latched
+  | faultLatched  : ReasonCode   -- previous fault still latched
+  | frameRejected : ReasonCode   -- CAN frame failed admissibility check
   deriving Inhabited
 
 structure DriveOutput where
@@ -87,6 +88,13 @@ def resetDriveState : DriveState := ⟨false, false⟩
 
 /-! ## CAN integration -/
 
+-- Expected CAN command frame ID for torque commands
+def torqueCmdId : UInt32 := 0x100
+
+-- Admissibility: only process standard data frames with expected ID and sufficient DLC
+@[inline] def frameAdmissible (frame : CanFrame) : Bool :=
+  frame.id == torqueCmdId && !frame.extended && !frame.rtr && frame.dlc >= 1
+
 -- Extract DriveInputs from CAN frame data byte 0 via bit masking
 def extractDriveInputs (frame : CanFrame) : DriveInputs :=
   let b := getU8 frame.data 0
@@ -97,11 +105,14 @@ def extractDriveInputs (frame : CanFrame) : DriveInputs :=
     estop_clear    := (b &&& 0x10) != 0
     enable_request := (b &&& 0x20) != 0 }
 
--- Full pipeline: CAN buffer → parse → extract inputs → evaluate gate
+-- Full pipeline: CAN buffer → parse → validate frame → extract inputs → evaluate gate
+-- Inadmissible frames (wrong ID, extended, RTR, or DLC < 1) are rejected without
+-- changing state, preventing unrelated CAN traffic from affecting torque decisions.
 def processDriveCommand (buf : Array UInt8) (st : DriveState) : DriveOutput × DriveState :=
-  let frame := parseMcp2515 buf
-  let inputs := extractDriveInputs frame
-  evalTorqueGate inputs st
+  if !frameAdmissible (parseMcp2515 buf) then
+    (⟨false, false, .frameRejected⟩, st)
+  else
+    evalTorqueGate (extractDriveInputs (parseMcp2515 buf)) st
 
 /-! ## Hex/display helpers -/
 
@@ -113,7 +124,8 @@ def reasonToString : ReasonCode → String
   | .overTemp     => "over-temp"
   | .batteryFault => "battery-fault"
   | .estopActive  => "estop-active"
-  | .faultLatched => "fault-latched"
+  | .faultLatched  => "fault-latched"
+  | .frameRejected => "frame-rejected"
 
 def boolToOnOff : Bool → String
   | true  => "ON"
@@ -179,6 +191,26 @@ def main : IO Unit := do
   let st5 : DriveState := ⟨false, false⟩
   let (out5, _st5') := processDriveCommand buf5 st5
   IO.println s!"  -> {outputToString out5}"
+  IO.println ""
+
+  -- Scenario 6: Wrong CAN ID (0x200 instead of 0x100) → frame rejected
+  IO.println "Test 6: Wrong CAN frame ID (0x200) — should be rejected"
+  -- SIDH=0x40, SIDL=0x00 → standard ID = (0x40 << 3) | (0x00 >> 5) = 0x200
+  let buf6 ← mkTorqueBuf #[0x40, 0x00, 0x00, 0x00, 0x01,
+                            0x3F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+  let st6 : DriveState := ⟨false, false⟩
+  let (out6, _st6') := processDriveCommand buf6 st6
+  IO.println s!"  -> {outputToString out6}"
+  IO.println ""
+
+  -- Scenario 7: RTR frame (remote request) → frame rejected
+  IO.println "Test 7: RTR frame — should be rejected"
+  -- DLC byte = 0x41 (RTR bit set + DLC=1)
+  let buf7 ← mkTorqueBuf #[0x20, 0x00, 0x00, 0x00, 0x41,
+                            0x3F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+  let st7 : DriveState := ⟨false, false⟩
+  let (out7, _st7') := processDriveCommand buf7 st7
+  IO.println s!"  -> {outputToString out7}"
   IO.println ""
 
   IO.println "torque-gate ok"

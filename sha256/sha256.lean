@@ -4,9 +4,20 @@
 -- examples/sha256_proof.lean imports it via `import sha256`, so the formal
 -- proofs (bv_decide, native_decide) apply to this exact code.
 
--- RISC-V cycle counter (implemented in lean_rt.c)
-@[extern "lean_cycles_now"]
-opaque cyclesNow : IO UInt64
+-- C-timed Lean SHA-256: calls l_sha256 with rdcycle in C so the Lean compiler
+-- can't reorder the pure computation outside the timing window.
+-- Returns (digest, cycles).
+@[extern "lean_sha256_timed"]
+opaque sha256Timed : Array UInt8 → IO (Array UInt32 × UInt64)
+
+-- C reference SHA-256 benchmarks (implemented in sha256_ref.c)
+-- Each hashes a hardcoded message, prints result via UART, returns cycle count.
+@[extern "lean_c_sha256_bench_3"]
+opaque cSha256Bench3 : IO UInt64
+@[extern "lean_c_sha256_bench_64"]
+opaque cSha256Bench64 : IO UInt64
+@[extern "lean_c_sha256_bench_256"]
+opaque cSha256Bench256 : IO UInt64
 
 def getU32 (a : Array UInt32) (i : Nat) : UInt32 := a.getD i 0
 def getU8 (a : Array UInt8) (i : Nat) : UInt8 := a.getD i 0
@@ -153,18 +164,59 @@ def hashToHex (hash : Array UInt32) : String :=
       s := s ++ uint32ToHex (getU32 hash i)
     return s
 
+-- Build an array [0x00, 0x01, ..., n-1]
+def mkSeqBytes (n : Nat) : Array UInt8 :=
+  Id.run do
+    let mut a : Array UInt8 := #[]
+    for i in [:n] do
+      a := a.push (i % 256).toUInt8
+    return a
+
+-- Print ratio as "N.Nx" using integer arithmetic
+def printRatio (leanCycles cCycles : UInt64) : IO Unit := do
+  if cCycles == 0 then
+    IO.println "Ratio:    N/A (C cycles = 0)"
+  else
+    let tenths := leanCycles * 10 / cCycles
+    let whole := tenths / 10
+    let frac := tenths % 10
+    IO.println s!"Ratio:    {whole}.{frac}x (Lean / C)"
+
+-- Run one benchmark: Lean hash + C ref hash, print comparison
+def runBench (label : String) (msg : Array UInt8) (expected : String)
+    (cBench : IO UInt64) : IO Unit := do
+  IO.println s!"--- {label} ---"
+  IO.println ""
+  -- Lean (timing done in C via sha256Timed to prevent reordering)
+  let (digest, leanCycles) ← sha256Timed msg
+  IO.println s!"Expected: {expected}"
+  IO.println s!"Lean:     {hashToHex digest}"
+  IO.println s!"  cycles: {leanCycles}"
+  -- C reference (prints its own "C ref: ..." line via UART)
+  let cCycles ← cBench
+  IO.println ""
+  printRatio leanCycles cCycles
+  IO.println ""
+
 -- Main
 def main : IO Unit := do
-  IO.println "=== SHA-256 (FIPS 180-4) ==="
+  IO.println "=== SHA-256 (FIPS 180-4) Benchmark ==="
   IO.println ""
-  IO.println "Computes SHA-256 of \"abc\" (the FIPS 180-4 test vector)."
-  IO.println "Implementation is proven correct: sha256 msg = spec_sha256 msg for all inputs."
+  IO.println "Compares Lean SHA-256 vs C reference (same FIPS 180-4 algorithm, same -O2)."
+  IO.println "Lean implementation is proven correct: sha256 msg = spec_sha256 msg for all inputs."
   IO.println ""
-  let msg : Array UInt8 := #[0x61, 0x62, 0x63]  -- "abc"
-  let t0 ← cyclesNow
-  let digest := sha256 msg
-  let t1 ← cyclesNow
-  IO.println "Input:    \"abc\""
-  IO.println "Expected: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-  IO.println s!"Result:   {hashToHex digest}"
-  IO.println s!"Cycles:   {t1 - t0}"
+  -- 3-byte input: "abc" (1 block)
+  let msg3 : Array UInt8 := #[0x61, 0x62, 0x63]
+  runBench "3 bytes (\"abc\", 1 block)" msg3
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    cSha256Bench3
+  -- 64-byte input: 0x00..0x3f (2 blocks)
+  let msg64 := mkSeqBytes 64
+  runBench "64 bytes (0x00..0x3f, 2 blocks)" msg64
+    "fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108"
+    cSha256Bench64
+  -- 256-byte input: 0x00..0xff (5 blocks)
+  let msg256 := mkSeqBytes 256
+  runBench "256 bytes (0x00..0xff, 5 blocks)" msg256
+    "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880"
+    cSha256Bench256

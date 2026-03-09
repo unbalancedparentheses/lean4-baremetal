@@ -21,6 +21,7 @@
 --   Proven:  Bit extraction correct, test vectors match, structural properties universal
 
 import can_lib
+import bitfield
 import Std.Tactic.BVDecide
 
 -- DecidableEq is needed for native_decide on CanFrame equality,
@@ -487,18 +488,6 @@ private theorem dlc_bridge (dlcByte : UInt8) :
     dlcByte &&& 0x0F =
     ⟨(dlcByte.toBitVec.extractLsb' 0 4 : BitVec 4).setWidth 8⟩ := by bv_decide
 
--- IDE: (x &&& 0x08) != 0 = getLsbD 3
-private theorem ide_bit_bridge (sidl : UInt8) :
-    ((sidl &&& 0x08) != 0) = sidl.toBitVec.getLsbD 3 := by
-  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
-  bv_decide
-
--- RTR: (x &&& 0x40) != 0 = getLsbD 6
-private theorem rtr_bit_bridge (dlcByte : UInt8) :
-    ((dlcByte &&& 0x40) != 0) = dlcByte.toBitVec.getLsbD 6 := by
-  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
-  bv_decide
-
 -- Data: extractData from 0 equals flat array literal
 private theorem extractData_eq_literal (buf : Array UInt8) :
     extractData buf 0 #[] = #[getU8 buf 5, getU8 buf 6, getU8 buf 7, getU8 buf 8,
@@ -532,7 +521,7 @@ theorem parseMcp2515_eq_spec (buf : Array UInt8) :
     parseMcp2515 buf = spec_parseMcp2515 buf := by
   unfold parseMcp2515 spec_parseMcp2515
   unfold isExtended extractStdId extractExtId extractRtr extractDlc clampDlc
-  simp only [ide_bit_bridge, rtr_bit_bridge, dlc_bridge, std_id_bridge, ext_id_bridge,
+  simp only [uint8_bit3, uint8_bit6, dlc_bridge, std_id_bridge, ext_id_bridge,
              extractData_eq_literal]
 
 -- crc15 = crc15Loop from 0

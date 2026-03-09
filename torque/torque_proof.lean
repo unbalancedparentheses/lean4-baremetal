@@ -4,6 +4,7 @@
 -- below is proven against the exact code that runs on bare metal.
 
 import torque
+import bitfield
 import Std.Tactic.BVDecide
 
 -- DecidableEq is needed for native_decide on equality tests,
@@ -88,37 +89,7 @@ theorem no_backdoor (inp : DriveInputs) (st : DriveState) :
   split <;> simp_all
   split <;> simp_all
 
-/-! ## Section 8: Bit extraction bridge (bv_decide) -/
-
-private theorem brake_bit_bridge (b : UInt8) :
-    ((b &&& 0x01) != 0) = b.toBitVec.getLsbD 0 := by
-  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
-  bv_decide
-
-private theorem gear_bit_bridge (b : UInt8) :
-    ((b &&& 0x02) != 0) = b.toBitVec.getLsbD 1 := by
-  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
-  bv_decide
-
-private theorem temp_bit_bridge (b : UInt8) :
-    ((b &&& 0x04) != 0) = b.toBitVec.getLsbD 2 := by
-  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
-  bv_decide
-
-private theorem battery_bit_bridge (b : UInt8) :
-    ((b &&& 0x08) != 0) = b.toBitVec.getLsbD 3 := by
-  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
-  bv_decide
-
-private theorem estop_bit_bridge (b : UInt8) :
-    ((b &&& 0x10) != 0) = b.toBitVec.getLsbD 4 := by
-  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
-  bv_decide
-
-private theorem enable_bit_bridge (b : UInt8) :
-    ((b &&& 0x20) != 0) = b.toBitVec.getLsbD 5 := by
-  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
-  bv_decide
+/-! ## Section 8: Bit extraction bridge (uses shared bitfield library) -/
 
 theorem extractDriveInputs_bits (frame : CanFrame) :
     let b := getU8 frame.data 0
@@ -131,8 +102,8 @@ theorem extractDriveInputs_bits (frame : CanFrame) :
     ∧ inp.enable_request = (b.toBitVec.getLsbD 5) := by
   unfold extractDriveInputs
   simp only []
-  exact ⟨brake_bit_bridge _, gear_bit_bridge _, temp_bit_bridge _,
-         battery_bit_bridge _, estop_bit_bridge _, enable_bit_bridge _⟩
+  exact ⟨uint8_bit0 _, uint8_bit1 _, uint8_bit2 _,
+         uint8_bit3 _, uint8_bit4 _, uint8_bit5 _⟩
 
 /-! ## Section 9: Test vectors (native_decide) -/
 
@@ -160,16 +131,59 @@ theorem test_no_enable :
     processDriveCommand (mkTestBuf 0x1F) ⟨false, false⟩ =
     (⟨false, false, .noEnable⟩, ⟨false, false⟩) := by native_decide
 
-/-! ## Section 10: End-to-end CAN → torque safety -/
+-- Wrong CAN ID (0x200): SIDH=0x40, SIDL=0x00 → ID = (0x40 << 3) | 0 = 0x200
+private def mkWrongIdBuf (cmd : UInt8) : Array UInt8 :=
+  #[0x40, 0x00, 0x00, 0x00, 0x01,
+    cmd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+theorem test_wrong_id_rejected :
+    processDriveCommand (mkWrongIdBuf 0x3F) ⟨false, false⟩ =
+    (⟨false, false, .frameRejected⟩, ⟨false, false⟩) := by native_decide
+
+-- RTR frame: DLC byte = 0x41 (RTR bit set + DLC=1)
+private def mkRtrBuf (cmd : UInt8) : Array UInt8 :=
+  #[0x20, 0x00, 0x00, 0x00, 0x41,
+    cmd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+theorem test_rtr_rejected :
+    processDriveCommand (mkRtrBuf 0x3F) ⟨false, false⟩ =
+    (⟨false, false, .frameRejected⟩, ⟨false, false⟩) := by native_decide
+
+/-! ## Section 10: Frame admissibility -/
+
+-- Inadmissible frames are always denied torque
+theorem inadmissible_denies_torque (buf : Array UInt8) (st : DriveState)
+    (h : frameAdmissible (parseMcp2515 buf) = false) :
+    (processDriveCommand buf st).1.torque_allowed = false := by
+  unfold processDriveCommand; simp [h]
+
+-- Inadmissible frames leave state unchanged
+theorem inadmissible_preserves_state (buf : Array UInt8) (st : DriveState)
+    (h : frameAdmissible (parseMcp2515 buf) = false) :
+    (processDriveCommand buf st).2 = st := by
+  unfold processDriveCommand; simp [h]
+
+-- Torque authorization requires an admissible frame
+theorem torque_requires_admissible (buf : Array UInt8) (st : DriveState) :
+    (processDriveCommand buf st).1.torque_allowed = true →
+    frameAdmissible (parseMcp2515 buf) = true := by
+  unfold processDriveCommand
+  split
+  · simp
+  · intro; simp_all
+
+/-! ## Section 11: End-to-end CAN → torque safety -/
 
 theorem can_to_torque_safety (buf : Array UInt8) (st : DriveState) :
     (processDriveCommand buf st).1.torque_allowed = true →
     safetyOk (extractDriveInputs (parseMcp2515 buf)) = true
     ∧ st.faulted = false := by
   unfold processDriveCommand
-  exact torque_implies_safety _ _
+  split
+  · simp
+  · exact torque_implies_safety _ _
 
-/-! ## Section 11: Well-formedness / output consistency -/
+/-! ## Section 12: Well-formedness / output consistency -/
 
 theorem torque_implies_enabled (inp : DriveInputs) (st : DriveState) :
     (evalTorqueGate inp st).1.torque_allowed = true →
@@ -204,21 +218,43 @@ theorem reason_ok_iff_torque (inp : DriveInputs) (st : DriveState) :
     split at h <;> simp_all
     split at h <;> simp_all
 
-/-! ## Section 12: Capstone theorem -/
+/-! ## Section 13: Capstone theorem -/
 
 theorem torque_gate_correct (buf : Array UInt8) (st : DriveState) :
+    -- 1. Torque allowed → safety ok and not faulted
     ((processDriveCommand buf st).1.torque_allowed = true →
       safetyOk (extractDriveInputs (parseMcp2515 buf)) = true ∧ st.faulted = false)
+    -- 2. Faulted → torque denied
     ∧ (st.faulted = true → (processDriveCommand buf st).1.torque_allowed = false)
+    -- 3. Torque allowed → enable requested
     ∧ ((processDriveCommand buf st).1.torque_allowed = true →
         (extractDriveInputs (parseMcp2515 buf)).enable_request = true)
-    ∧ (st.faulted = false →
+    -- 4. Admissible + not faulted + unsafe → fault latched
+    ∧ (frameAdmissible (parseMcp2515 buf) = true →
+        st.faulted = false →
         safetyOk (extractDriveInputs (parseMcp2515 buf)) = false →
         (processDriveCommand buf st).2.faulted = true)
+    -- 5. Faulted → fault persists (even for inadmissible frames)
     ∧ (st.faulted = true → (processDriveCommand buf st).2.faulted = true) := by
   unfold processDriveCommand
-  exact ⟨torque_implies_safety _ _,
-         faulted_denies_torque _ _,
-         no_backdoor _ _,
-         unsafe_latches_fault _ _,
-         fault_persists _ _⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  -- 1. torque allowed → safety ∧ not faulted
+  · split
+    · simp
+    · exact torque_implies_safety _ _
+  -- 2. faulted → torque denied
+  · split
+    · simp
+    · exact faulted_denies_torque _ _
+  -- 3. torque → enable requested
+  · split
+    · simp
+    · exact no_backdoor _ _
+  -- 4. admissible + not faulted + unsafe → fault latched
+  · split
+    · intro h; simp_all
+    · intro _ h1 h2; exact unsafe_latches_fault _ _ h1 h2
+  -- 5. faulted → fault persists
+  · split
+    · intro h; exact h
+    · exact fault_persists _ _
