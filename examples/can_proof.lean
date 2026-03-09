@@ -457,33 +457,83 @@ theorem crc15_eq_spec_full (data : Array UInt8) :
   unfold crc15
   exact crc15Loop_eq_spec data 0 0x0000
 
-/-! ## Section 14: Implementation = spec equivalence (parser) -/
+/-! ## Section 14: Implementation = spec equivalence (parser)
 
--- Reference specification for the full parser
+    The spec below uses BitVec field extraction (extractLsb', getLsbD, ++)
+    matching MCP2515 datasheet bit positions, so the bridge proof between
+    the implementation's shift-mask formulas and the spec requires real
+    work (bv_decide), not just rfl. -/
+
+-- Bridge lemmas: each proves the implementation's shift-mask formula
+-- equals the spec's BitVec operation.
+
+-- Standard ID: shift-OR = concat+zeroExtend (by bv_decide, 2^16 cases)
+private theorem std_id_bridge (sidh sidl : UInt8) :
+    (sidh.toUInt32 <<< 3) ||| (sidl.toUInt32 >>> 5) =
+    ⟨(sidh.toBitVec ++ sidl.toBitVec.extractLsb' 5 3 : BitVec 11).setWidth 32⟩ := by
+  bv_decide
+
+-- Extended ID: shift-OR = concat+zeroExtend (by bv_decide, 2^32 cases)
+private theorem ext_id_bridge (sidh sidl eid8 eid0 : UInt8) :
+    (sidh.toUInt32 <<< 21) ||| ((sidl.toUInt32 &&& 0xE0) <<< 13) |||
+    ((sidl.toUInt32 &&& 0x03) <<< 16) ||| (eid8.toUInt32 <<< 8) ||| eid0.toUInt32 =
+    ⟨(sidh.toBitVec ++ sidl.toBitVec.extractLsb' 5 3 ++
+     sidl.toBitVec.extractLsb' 0 2 ++
+     eid8.toBitVec ++ eid0.toBitVec : BitVec 29).setWidth 32⟩ := by
+  bv_decide
+
+-- DLC: mask 0x0F = extractLsb' 0 4 (by bv_decide)
+private theorem dlc_bridge (dlcByte : UInt8) :
+    dlcByte &&& 0x0F =
+    ⟨(dlcByte.toBitVec.extractLsb' 0 4 : BitVec 4).setWidth 8⟩ := by bv_decide
+
+-- IDE: (x &&& 0x08) != 0 = getLsbD 3
+private theorem ide_bit_bridge (sidl : UInt8) :
+    ((sidl &&& 0x08) != 0) = sidl.toBitVec.getLsbD 3 := by
+  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
+  bv_decide
+
+-- RTR: (x &&& 0x40) != 0 = getLsbD 6
+private theorem rtr_bit_bridge (dlcByte : UInt8) :
+    ((dlcByte &&& 0x40) != 0) = dlcByte.toBitVec.getLsbD 6 := by
+  simp only [bne, BEq.beq, UInt8.eq_iff_toBitVec_eq, UInt8.toBitVec_and]
+  bv_decide
+
+-- Data: extractData from 0 equals flat array literal
+private theorem extractData_eq_literal (buf : Array UInt8) :
+    extractData buf 0 #[] = #[getU8 buf 5, getU8 buf 6, getU8 buf 7, getU8 buf 8,
+                               getU8 buf 9, getU8 buf 10, getU8 buf 11, getU8 buf 12] := by
+  simp [extractData]
+
+-- Reference specification for the full parser (BitVec field extraction
+-- matching MCP2515 datasheet bit positions)
 def spec_parseMcp2515 (buf : Array UInt8) : CanFrame :=
   let sidh := getU8 buf 0
   let sidl := getU8 buf 1
   let eid8 := getU8 buf 2
   let eid0 := getU8 buf 3
   let dlcByte := getU8 buf 4
-  let ext := (sidl &&& 0x08) != 0
-  let id := if ext then
-    (sidh.toUInt32 <<< 21) ||| ((sidl.toUInt32 &&& 0xE0) <<< 13) |||
-    ((sidl.toUInt32 &&& 0x03) <<< 16) ||| (eid8.toUInt32 <<< 8) ||| eid0.toUInt32
+  let ext := sidl.toBitVec.getLsbD 3
+  let id : UInt32 := if ext then
+    ⟨(sidh.toBitVec ++ sidl.toBitVec.extractLsb' 5 3 ++
+     sidl.toBitVec.extractLsb' 0 2 ++
+     eid8.toBitVec ++ eid0.toBitVec : BitVec 29).setWidth 32⟩
   else
-    (sidh.toUInt32 <<< 3) ||| (sidl.toUInt32 >>> 5)
-  let rtr := (dlcByte &&& 0x40) != 0
-  let rawDlc := dlcByte &&& 0x0F
+    ⟨(sidh.toBitVec ++ sidl.toBitVec.extractLsb' 5 3 : BitVec 11).setWidth 32⟩
+  let rtr := dlcByte.toBitVec.getLsbD 6
+  let rawDlc : UInt8 := ⟨(dlcByte.toBitVec.extractLsb' 0 4 : BitVec 4).setWidth 8⟩
   let dlc := if rawDlc > 8 then 8 else rawDlc
   { id := id, extended := ext, rtr := rtr, dlc := dlc,
-    data := extractData buf 0 #[] }
+    data := #[getU8 buf 5, getU8 buf 6, getU8 buf 7, getU8 buf 8,
+              getU8 buf 9, getU8 buf 10, getU8 buf 11, getU8 buf 12] }
 
 -- parseMcp2515 = spec_parseMcp2515
 theorem parseMcp2515_eq_spec (buf : Array UInt8) :
     parseMcp2515 buf = spec_parseMcp2515 buf := by
   unfold parseMcp2515 spec_parseMcp2515
   unfold isExtended extractStdId extractExtId extractRtr extractDlc clampDlc
-  rfl
+  simp only [ide_bit_bridge, rtr_bit_bridge, dlc_bridge, std_id_bridge, ext_id_bridge,
+             extractData_eq_literal]
 
 -- crc15 = crc15Loop from 0
 theorem crc15_eq (data : Array UInt8) :
