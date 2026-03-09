@@ -72,10 +72,15 @@ What's proven:
 - **Bitwise operations** match FIPS 180-4 spec — universal over all 32-bit inputs (`bv_decide`)
 - **Test vectors** — SHA-256("abc"), SHA-256(""), and the 56-byte two-block FIPS B.2 vector verified at compile time (`native_decide`)
 - **Structural properties (universal)** — `sha256` always returns 8 elements, `messageSchedule` returns 64, `padMsg` output is a multiple of 64 bytes, `compress` preserves array length 8 — all proven for ALL inputs
+- **Content-level helper correctness** — `parseWords` decodes big-endian words correctly, `extractBlock` returns the requested bytes, `appendZeros` preserves old bytes and adds zeros, `padMsg` preserves the original message and places the `0x80` marker correctly
+- **Message schedule recurrence** — `expandWords` preserves the initial 16 words and satisfies the SHA-256 recurrence for words 16..63
+- **Composition lemmas** — `compress`, `sha256Loop`, and `sha256` are unfolded into the expected pipeline structure, so the proofs connect to the exact implementation shape
 - **Algebraic properties** — XOR commutativity/associativity, AND/OR commutativity
 
 What's not yet proven:
-- Full functional correctness for all inputs (requires complete FIPS 180-4 reference spec — comparable in scope to HACL*/Fiat-Crypto)
+- Full end-to-end functional correctness for all inputs via a single theorem stating `sha256 = FIPS_180_4_spec` on arbitrary messages
+- Compression-round correctness against a separately defined full reference state-transition function
+- Full padding correctness including the final 64-bit length encoding as a standalone spec theorem
 
 ## Slab allocator
 
