@@ -147,6 +147,8 @@ verify:
 	lake build sha256_proof
 	@echo "  VERIFY  examples/can_proof.lean (via lake build)"
 	lake build can_proof
+	@echo "  VERIFY  examples/torque_proof.lean (via lake build)"
+	lake build torque_proof
 
 # Automated test: build, run on QEMU, check expected output
 test:
@@ -189,6 +191,14 @@ test:
 		echo "  PASS    can"; \
 	else \
 		echo "  FAIL    can"; echo "$$output"; exit 1; \
+	fi
+	@$(MAKE) --no-print-directory EXAMPLE=torque all
+	@echo "  TEST    torque"
+	@output=$$($(call run_with_timeout,$(QEMU) $(QEMUFLAGS) -kernel $(BUILDDIR)/torque.elf)); \
+	if echo "$$output" | grep -q "torque-gate ok"; then \
+		echo "  PASS    torque"; \
+	else \
+		echo "  FAIL    torque"; echo "$$output"; exit 1; \
 	fi
 	@$(MAKE) --no-print-directory EXAMPLE=runtime_test all
 	@echo "  TEST    runtime_test"

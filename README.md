@@ -173,9 +173,10 @@ RISC-V 64-bit on QEMU `virt`. Open ISA, great tooling. Everything you need is pr
 
 The SHA-256 end-to-end theorem is done. The next proof work is platform-oriented:
 
-1. **Strengthen CAN proofs** — make the CAN spec fully independent from the implementation (currently `spec_parseMcp2515` is still close to the implementation), and prove `crc15 = spec_crc15` for arbitrary inputs
-2. **Extract reusable proof libraries** — bitfield extraction, bounded array access, and packet encoder/decoder utilities that future examples can import
-3. **Third verified example** — a new protocol or algorithm that reuses those libraries, demonstrating that the proof infrastructure generalizes
+1. **Strengthen CAN proofs** — keep pushing the CAN example toward a cleaner independent spec and reusable bridge lemmas
+2. **Extract reusable proof libraries** — bitfield extraction, bounded array access, encoder/decoder roundtrip, and policy/state-machine utilities
+3. **Third verified subsystem** — build a verified automotive torque-enable / drive-authority gate fed by validated CAN messages
+4. **Finance follow-on** — after the automotive gate, reuse the same policy/state proof machinery for a hardware-near pre-trade risk / order admission gate
 
 The goal is a platform proof story, not just isolated verified programs.
 

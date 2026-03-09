@@ -101,7 +101,28 @@ Exit criteria:
 - New examples are mostly composition of shared libraries plus small application logic.
 - The platform starts to look like a reusable foundation for verified firmware components.
 
-## Phase 6: Interrupts, Timers, and Controlled Concurrency
+## Phase 6: Verified Authority / Policy Subsystems
+
+Goal: prove that the platform can express real domain-specific safety and authorization logic, not just parsers and crypto.
+
+Recommended first subsystem:
+- Automotive torque-enable / drive-authority gate fed by validated CAN messages
+
+Follow-on subsystem:
+- Hardware-near finance order admission / pre-trade risk gate using the same policy/state proof style
+
+Deliverables:
+- Typed command/event inputs feeding a small decision engine
+- Proofs that unsafe enablement / admission is impossible
+- Proofs that hard-stop conditions dominate nominal commands
+- Deterministic reject / deny reasons
+- Reusable proof utilities for state transitions, authority predicates, and dominance rules
+
+Exit criteria:
+- The repo contains at least one real domain-specific safety/authority subsystem beyond parsing
+- The extracted proof machinery is reusable in a second domain with similar decision logic
+
+## Phase 7: Interrupts, Timers, and Controlled Concurrency
 
 Goal: extend the platform into real embedded control flows without jumping directly to a microkernel.
 
@@ -114,7 +135,7 @@ Deliverables:
 Exit criteria:
 - The platform can express interrupt-driven firmware patterns without collapsing into unstructured C stubs.
 
-## Phase 7: Secure Boot and Trusted Boot Components
+## Phase 8: Secure Boot and Trusted Boot Components
 
 Goal: add platform-level security components that justify the formal verification story.
 
@@ -126,7 +147,7 @@ Deliverables:
 Exit criteria:
 - The project can credibly claim value for high-assurance embedded and security-sensitive systems.
 
-## Phase 8: Toward a Minimal Lean Bare-Metal Kernel Substrate
+## Phase 9: Toward a Minimal Lean Bare-Metal Kernel Substrate
 
 Goal: explore whether the platform can support a tiny scheduler / kernel substrate.
 
@@ -154,10 +175,10 @@ These run across phases:
 
 ## Near-Term Priority Order
 
-1. Fix build/test reliability.
-2. Finish the end-to-end SHA-256 proof.
-3. Define and document the supported runtime surface.
-4. Add a second verified systems example.
+1. Strengthen the CAN proof/spec split and extract reusable proof utilities.
+2. Build an automotive torque-enable / drive-authority gate on top of validated CAN inputs.
+3. Reuse the same proof pattern for a hardware-near finance order admission / risk gate.
+4. Define and document the supported runtime surface.
 5. Port to one real RISC-V board.
 
 ## Success Criteria

@@ -1,8 +1,8 @@
 -- Formal verification of CAN 2.0 Frame Parser (ISO 11898 / Bosch CAN 2.0) in Lean 4
 --
--- This file imports examples/can.lean (`import can`), so every theorem
+-- This file imports examples/can_lib.lean (`import can_lib`), so every theorem
 -- below is proven against the exact code that runs on bare metal.
--- If someone changes can.lean, these proofs must still typecheck or
+-- If someone changes can_lib.lean, these proofs must still typecheck or
 -- the build fails — the Lean kernel enforces the guarantee.
 --
 -- What this file proves (universally quantified unless noted):
@@ -20,7 +20,7 @@
 --   Trusted: Lean kernel, lean -c compiler, GCC cross-compiler, freestanding runtime
 --   Proven:  Bit extraction correct, test vectors match, structural properties universal
 
-import can
+import can_lib
 import Std.Tactic.BVDecide
 
 -- DecidableEq is needed for native_decide on CanFrame equality,
