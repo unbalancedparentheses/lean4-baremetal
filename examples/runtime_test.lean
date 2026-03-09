@@ -11,6 +11,9 @@ def check (name : String) (ok : Bool) : IO Unit := do
 
 def main : IO Unit := do
   IO.println "=== Runtime Coverage Test ==="
+  IO.println ""
+  IO.println "Tests key runtime features: thunks, closures, arrays, ST refs, strings, ByteArrays."
+  IO.println ""
 
   -- 1. Thunk forcing (lean_mk_thunk, lean_thunk_get_core)
   let t : Thunk Nat := Thunk.mk (fun _ => 42)

@@ -155,9 +155,16 @@ def hashToHex (hash : Array UInt32) : String :=
 
 -- Main
 def main : IO Unit := do
+  IO.println "=== SHA-256 (FIPS 180-4) ==="
+  IO.println ""
+  IO.println "Computes SHA-256 of \"abc\" (the FIPS 180-4 test vector)."
+  IO.println "Implementation is proven correct: sha256 msg = spec_sha256 msg for all inputs."
+  IO.println ""
   let msg : Array UInt8 := #[0x61, 0x62, 0x63]  -- "abc"
   let t0 ← cyclesNow
   let digest := sha256 msg
   let t1 ← cyclesNow
-  IO.println (hashToHex digest)
-  IO.println s!"cycles: {t1 - t0}"
+  IO.println "Input:    \"abc\""
+  IO.println "Expected: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  IO.println s!"Result:   {hashToHex digest}"
+  IO.println s!"Cycles:   {t1 - t0}"

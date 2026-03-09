@@ -5,6 +5,11 @@ def buildChunk (round : Nat) : Array UInt32 := Id.run do
   return xs
 
 def main : IO Unit := do
+  IO.println "=== Allocator Stress Test ==="
+  IO.println ""
+  IO.println "Tests the slab allocator by allocating and mapping 64 rounds of 512-element"
+  IO.println "arrays. Exercises alloc, free, and reuse across 8 size classes."
+  IO.println ""
   let mut lastMsg := ""
   for round in [:64] do
     let xs := buildChunk round
