@@ -115,8 +115,13 @@ def reasonToString : ReasonCode → String
   | .estopActive  => "estop-active"
   | .faultLatched => "fault-latched"
 
+def boolToOnOff : Bool → String
+  | true  => "ON"
+  | false => "OFF"
+
 def outputToString (out : DriveOutput) : String :=
-  s!"torque={out.torque_allowed} enabled={out.drive_enabled} reason={reasonToString out.reason}"
+  let verdict := if out.torque_allowed then "GRANTED" else "DENIED"
+  s!"torque {verdict} (reason: {reasonToString out.reason})"
 
 /-! ## Main — 5 scenarios for bare-metal test -/
 
@@ -125,7 +130,12 @@ def outputToString (out : DriveOutput) : String :=
 @[noinline] def mkTorqueBuf (bytes : Array UInt8) : IO (Array UInt8) := pure bytes
 
 def main : IO Unit := do
-  IO.println "=== Torque-Enable Gate ==="
+  IO.println "=== Automotive Torque-Enable Gate ==="
+  IO.println ""
+  IO.println "Decides whether an electric drive may produce torque."
+  IO.println "Reads a CAN frame with safety inputs (brake, gear, temp, battery, e-stop)"
+  IO.println "and an enable request from the driver."
+  IO.println ""
 
   -- Build a CAN buffer: standard frame ID=0x100, DLC=1, data byte 0 = command bits
   -- MCP2515 layout: SIDH=0x20, SIDL=0x00, EID8=0x00, EID0=0x00, DLC=0x01, data[0]=cmd
@@ -133,33 +143,42 @@ def main : IO Unit := do
     mkTorqueBuf #[0x20, 0x00, 0x00, 0x00, 0x01,
                   cmd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
 
-  -- Scenario 1: All conditions met (brake=1, gear=1, temp=1, batt=1, estop=1, enable=1)
-  -- cmd = 0x3F = 0b00111111
+  -- Scenario 1: All safety ok + driver requests enable → torque granted
+  IO.println "Test 1: All safety conditions met, driver requests enable"
   let buf1 ← mkCmdBuf 0x3F
   let st0 : DriveState := ⟨false, false⟩
   let (out1, st1) := processDriveCommand buf1 st0
-  IO.println s!"1: {outputToString out1}"  -- torque=true enabled=true reason=ok
+  IO.println s!"  -> {outputToString out1}"
+  IO.println ""
 
-  -- Scenario 2: E-stop active (estop_clear=0) — cmd = 0x2F = 0b00101111
+  -- Scenario 2: Emergency stop pressed → torque denied, fault latched
+  IO.println "Test 2: Emergency stop is pressed"
   let buf2 ← mkCmdBuf 0x2F
   let (out2, st2) := processDriveCommand buf2 st1
-  IO.println s!"2: {outputToString out2}"  -- torque=false enabled=false reason=estop-active
+  IO.println s!"  -> {outputToString out2}"
+  IO.println ""
 
-  -- Scenario 3: After fault latch — even with all-ok input, still denied
+  -- Scenario 3: Fault is latched → denied even though inputs are now all ok
+  IO.println "Test 3: All inputs ok again, but fault is still latched from test 2"
   let buf3 ← mkCmdBuf 0x3F
   let (out3, _st3) := processDriveCommand buf3 st2
-  IO.println s!"3: {outputToString out3}"  -- torque=false enabled=false reason=fault-latched
+  IO.println s!"  -> {outputToString out3}"
+  IO.println ""
 
-  -- Scenario 4: Reset then re-enable — torque allowed again
+  -- Scenario 4: Operator resets the fault, then re-enables → torque granted
+  IO.println "Test 4: Operator resets fault, all conditions met again"
   let st4 := resetDriveState
   let buf4 ← mkCmdBuf 0x3F
   let (out4, _st4') := processDriveCommand buf4 st4
-  IO.println s!"4: {outputToString out4}"  -- torque=true enabled=true reason=ok
+  IO.println s!"  -> {outputToString out4}"
+  IO.println ""
 
-  -- Scenario 5: No enable request (enable=0) — cmd = 0x1F = 0b00011111
+  -- Scenario 5: Everything safe but driver doesn't request enable → no torque
+  IO.println "Test 5: All safety ok, but driver has not requested enable"
   let buf5 ← mkCmdBuf 0x1F
   let st5 : DriveState := ⟨false, false⟩
   let (out5, _st5') := processDriveCommand buf5 st5
-  IO.println s!"5: {outputToString out5}"  -- torque=false enabled=false reason=no-enable
+  IO.println s!"  -> {outputToString out5}"
+  IO.println ""
 
   IO.println "torque-gate ok"
