@@ -33,9 +33,19 @@ examples/sha256.lean              Lean source
    ba7816bf8f01cfea...            SHA-256("abc"), correct
 ```
 
-Lean's compiler emits C. We cross-compile that C together with our freestanding runtime for RISC-V. QEMU runs the resulting ELF directly — no BIOS, no bootloader, no OS. The binary starts at `boot.S`, which sets up a stack and jumps to C, which initializes the UART and the Lean runtime, then calls Lean's `main`.
+Lean's compiler emits C. We cross-compile that C together with our freestanding runtime for RISC-V. QEMU runs the resulting ELF directly — no BIOS, no bootloader, no OS. The binary starts at `platform/boot.S`, which sets up a stack and jumps to the Lean-generated `main`, which initializes the runtime and calls Lean's entry point.
 
 The important part: the proofs in `sha256_proof.lean` and `can_proof.lean` import their respective implementation files via Lake. So the code the Lean kernel checks is the same code that gets compiled to C and runs on the machine. There is one source of truth.
+
+## Project structure
+
+The C/asm code is split into two directories by role:
+
+- **`platform/`** — Hardware-specific code that changes per board: boot sequence, linker script, board config, UART driver. To port to new hardware, you replace or add files here. Nothing in `platform/` knows about Lean's object model.
+
+- **`runtime/`** — Lean freestanding runtime that is board-independent: the slab allocator, refcounting, string/array operations, libc stubs, and the `lean/lean.h` shim. This code implements the interface that Lean's generated C expects. It talks to hardware only through `platform/` headers (`uart.h`, `board.h`).
+
+This separation means porting to a new board is a `platform/`-only change, and runtime bug fixes don't touch hardware code.
 
 ## What we had to replace
 
@@ -103,9 +113,11 @@ This follows the same approach as [HACL\*](https://hacl-star.github.io/) (F\*) a
 - [x] Freestanding runtime replaces libc, allocator, thread, and I/O dependencies
 - [x] SHA-256 is proved end-to-end against an independent reference spec
 - [x] CAN 2.0 frame parser proved correct (roundtrip, bit extraction, CRC-15)
+- [x] `platform/` vs `runtime/` split — clean porting boundary
 - [x] `make nix-test` and `make nix-verify` work as the main validation path
+- [ ] Reusable proof libraries for bitfield extraction, bounded arrays, packet encoding
+- [ ] A third verified example that reuses those libraries
 - [ ] Real hardware support
-- [ ] A broader documented platform surface for reusable bare-metal Lean programs
 
 ## Known runtime issues / next C fixes
 
@@ -148,12 +160,25 @@ examples/
   sha256_proof.lean   Formal proofs (~70 theorems, imports sha256.lean)
   can.lean            CAN 2.0 frame parser (MCP2515, CRC-15)
   can_proof.lean      Formal proofs (roundtrip, bit extraction, test vectors)
+  alloc_stress.lean   Allocator stress test
+  io_error.lean       IO error handling test
+  runtime_test.lean   Runtime feature coverage test
 ```
 
 ## Target
 
 RISC-V 64-bit on QEMU `virt`. Open ISA, great tooling. Everything you need is provided by `nix develop`.
 
+## Next proof targets
+
+The SHA-256 end-to-end theorem is done. The next proof work is platform-oriented:
+
+1. **Strengthen CAN proofs** — make the CAN spec fully independent from the implementation (currently `spec_parseMcp2515` is still close to the implementation), and prove `crc15 = spec_crc15` for arbitrary inputs
+2. **Extract reusable proof libraries** — bitfield extraction, bounded array access, and packet encoder/decoder utilities that future examples can import
+3. **Third verified example** — a new protocol or algorithm that reuses those libraries, demonstrating that the proof infrastructure generalizes
+
+The goal is a platform proof story, not just isolated verified programs.
+
 ## Roadmap
 
-This README is the front page. The longer platform plan lives in [ROADMAP.md](/Users/unbalancedparen/projects/lean4-baremetal/ROADMAP.md).
+This README is the front page. The longer platform plan lives in [ROADMAP.md](ROADMAP.md).
