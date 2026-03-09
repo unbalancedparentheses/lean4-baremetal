@@ -1,162 +1,113 @@
 # lean4-baremetal
 
-Run Lean 4 programs directly on bare-metal hardware with no operating system.
+Lean 4 on bare-metal RISC-V. No OS, no libc, no runtime dependencies.
 
-Lean 4 compiles to C, but its runtime depends on libc, GMP, pthreads, libuv, and C++ exceptions. This project provides a **freestanding replacement runtime** (~1000 lines of C) that removes all those dependencies, enabling Lean programs to run on raw hardware.
+Lean compiles to C, but the standard runtime pulls in glibc, GMP, pthreads, libuv, and C++ exceptions. We wrote a freestanding replacement (~1000 lines of C) so Lean programs can run directly on hardware.
 
-## Quick start
+The first real program is SHA-256, proven correct end-to-end: `sha256 msg = spec_sha256 msg` for all inputs, checked by the Lean kernel.
+
+## Try it
 
 ```bash
-nix develop                     # enter dev environment
+nix develop
 make nix-run                    # hello world on bare-metal RISC-V
-make EXAMPLE=sha256 nix-run     # formally verified SHA-256 on bare-metal
-make nix-test                   # run all tests, check expected output
-make nix-verify                 # typecheck formal proofs via lake
+make EXAMPLE=sha256 nix-run     # SHA-256 on bare-metal
+make nix-verify                 # typecheck all formal proofs
+make nix-test                   # build + run + check output
 ```
 
-## What this does
+## How it works
 
 ```
-examples/sha256.lean            (Lean 4 source + formal proofs)
-        │
-        ▼  lean -c
-   build/sha256.c               (Lean compiler emits C)
-        │
-        ▼  riscv64-elf-gcc -ffreestanding -nostdlib
-   build/kernel.elf             (cross-compiled with freestanding runtime)
-        │
-        ▼  qemu-system-riscv64 -machine virt -bios none
-   ba7816bf8f01cfea...          (SHA-256 of "abc", correct)
+examples/sha256.lean              Lean source
+        |  lean -c
+   build/sha256.c                 generated C
+        |  riscv64-gcc -ffreestanding -nostdlib
+   build/sha256.elf               bare-metal binary
+        |  qemu-system-riscv64 -machine virt -bios none
+   ba7816bf8f01cfea...            SHA-256("abc"), correct
 ```
 
-The SHA-256 implementation is formally verified: `sha256_proof.lean` imports `sha256.lean` and proves bitwise operations match FIPS 180-4 (universal, via `bv_decide`) and test vectors are correct (compile-time, via `native_decide`). If someone changes `sha256.lean` and breaks a proof, `make verify` fails.
+Lean's compiler emits C. We cross-compile that C together with our freestanding runtime for RISC-V. QEMU runs the resulting ELF directly — no BIOS, no bootloader, no OS. The binary starts at `boot.S`, which sets up a stack and jumps to C, which initializes the UART and the Lean runtime, then calls Lean's `main`.
 
-## Why this matters
+The important part: the proofs in `sha256_proof.lean` import `sha256.lean` via Lake. So the code the Lean kernel checks is the same code that gets compiled to C and runs on the machine. There is one source of truth.
 
-Lean 4 produces machine-checkable proofs about programs. Bare-metal Lean means formally verified code for avionics (DO-178C), medical devices (IEC 62304), automotive (ISO 26262), embedded systems, and RTOS kernels.
+## What we had to replace
 
-## What we replaced
+Lean's runtime assumes a hosted environment. To run freestanding, we had to replace every external dependency with something that works without an OS.
 
-| Dependency | Original | Replacement |
-|-----------|----------|-------------|
-| libc | glibc/musl | `libc_min.c` — memcpy, memset, strlen, abort |
-| Allocator | mimalloc | Slab allocator — 8 size classes, free lists, O(1) alloc/free |
-| GMP | libgmp | Panic on overflow (fixed-width integers only) |
-| pthreads | libpthread | No-op stubs (single-threaded) |
-| C++ runtime | libstdc++ | Rewritten in C, exceptions → panic + halt |
-| stdio | printf/fprintf | `uart.c` — NS16550A UART driver |
+| Dependency | Standard | Our replacement |
+|---|---|---|
+| libc | glibc/musl | `libc_min.c` — just memcpy, memset, strlen, abort |
+| Allocator | mimalloc | Slab allocator with 8 size classes and per-class free lists |
+| GMP | libgmp | Panic on overflow (we only use fixed-width integers) |
+| Threads | pthreads | No-op stubs (single-threaded) |
+| C++ runtime | libstdc++ | Rewritten in C. Exceptions become panic + halt |
+| I/O | stdio | NS16550A UART driver talking directly to hardware registers |
 
-## Project structure
+The slab allocator deserves a note. Lean's runtime allocates and frees small objects constantly (closures, thunks, array slices). We use 8 size classes (32 to 544 bytes) with free lists, so alloc and free are O(1). Objects larger than 544 bytes fall back to bump allocation. It's simple but it works — SHA-256 runs to completion with real memory reuse.
+
+## SHA-256 proofs
+
+`sha256_proof.lean` contains about 70 theorems organized in 18 sections. The main result is end-to-end functional correctness:
+
+```lean
+theorem sha256_eq_spec (msg : Array UInt8) :
+    sha256 msg = spec_sha256 msg
+```
+
+This says: for every possible input message, our implementation produces the same output as the reference specification. `spec_sha256` is a clean formalization of FIPS 180-4, factored to match the standard section by section:
+
+- `spec_pad` handles message padding (section 5.1.1), with `spec_encodeBE64` for the 64-bit big-endian length field
+- `spec_round` is a single compression round (section 6.2.2 step 3)
+- `spec_compressRounds` iterates `spec_round` 64 times
+- `spec_compress` wraps the rounds with initialization and finalization
+- `spec_sha256Loop` processes each 64-byte block
+
+The proof works bottom-up. First we prove each implementation function equals its spec counterpart (`compressRounds = spec_compressRounds`, `padMsg = spec_pad`, etc.), then compose them into the top-level theorem.
+
+Below that, the bitwise building blocks are also verified:
+
+- Every rotation, Ch, Maj, and sigma function is proven correct for all 2^32 inputs using `bv_decide` (a SAT-based decision procedure for bitvector arithmetic)
+- The FIPS 180-4 test vectors — SHA-256 of the empty string, "abc", and the 56-byte two-block message from appendix B — are verified at compile time using `native_decide`
+
+Everything is assembled into a single capstone theorem `sha256_correct` that bundles all the properties together. If any component proof breaks, the whole file fails to typecheck.
+
+### Trust model
+
+This follows the same approach as [HACL\*](https://hacl-star.github.io/) (F\*) and [Fiat-Crypto](https://github.com/mit-plv/fiat-crypto) (Coq). What you have to trust: the Lean 4 kernel, the Lean-to-C compiler, GCC's cross-compilation, and our freestanding runtime. What's proven: everything from individual bitwise operations up through the full SHA-256 pipeline, for all inputs.
+
+## Current status
+
+- [x] Lean programs run directly on bare-metal RISC-V in QEMU
+- [x] Freestanding runtime replaces libc, allocator, thread, and I/O dependencies
+- [x] SHA-256 is proved end-to-end against an independent reference spec
+- [x] `make nix-test` and `make nix-verify` work as the main validation path
+- [ ] Real hardware support
+- [ ] Additional verified systems examples beyond SHA-256
+- [ ] A broader documented platform surface for reusable bare-metal Lean programs
+
+## Files
 
 ```
-boot.S              RISC-V entry: disable interrupts, zero BSS, set stack, call main
-linker.ld           Memory layout at 0x80000000 (QEMU virt)
-lean_rt.c/h         Freestanding Lean 4 runtime (slab allocator, refcounting, strings, arrays)
-uart.c/h            NS16550A UART driver for QEMU virt
-libc_min.c          Minimal libc stubs
-main.c              C entry point: init UART, init Lean runtime, call Lean main
-lakefile.lean       Lake project (proof file imports implementation)
-lean-toolchain      Lean 4.28.0
-flake.nix           Nix flake for reproducible dev environment
+boot.S                RISC-V entry point (disable interrupts, zero BSS, set stack)
+linker.ld             Memory layout at 0x80000000 (QEMU virt machine)
+lean_rt.c/h           Freestanding Lean runtime (slab allocator, refcounting, strings, arrays)
+uart.c/h              NS16550A UART driver
+libc_min.c            Minimal libc stubs
+main.c                C entry: init UART, init Lean runtime, call Lean main
+lakefile.lean         Lake build config (proof file imports implementation)
+flake.nix             Nix flake for reproducible builds
 examples/
-  hello.lean        Hello world
-  sha256.lean       SHA-256 (FIPS 180-4) — single source of truth
-  sha256_proof.lean Formal proofs — imports sha256.lean
+  hello.lean          Hello world
+  sha256.lean         SHA-256 implementation (FIPS 180-4)
+  sha256_proof.lean   Formal proofs (~70 theorems, imports sha256.lean)
 ```
-
-## Formal verification
-
-`sha256_proof.lean` imports `sha256.lean` via lake. The proofs are about the exact code that runs on bare metal — one source of truth.
-
-What's proven:
-- **Bitwise operations** match FIPS 180-4 spec — universal over all 32-bit inputs (`bv_decide`)
-- **Test vectors** — SHA-256("abc"), SHA-256(""), and the 56-byte two-block FIPS B.2 vector verified at compile time (`native_decide`)
-- **Structural properties (universal)** — `sha256` always returns 8 elements, `messageSchedule` returns 64, `padMsg` output is a multiple of 64 bytes, `compress` preserves array length 8 — all proven for ALL inputs
-- **Content-level helper correctness** — `parseWords` decodes big-endian words correctly, `extractBlock` returns the requested bytes, `appendZeros` preserves old bytes and adds zeros, `padMsg` preserves the original message and places the `0x80` marker correctly
-- **Message schedule recurrence** — `expandWords` preserves the initial 16 words and satisfies the SHA-256 recurrence for words 16..63
-- **Composition lemmas** — `compress`, `sha256Loop`, and `sha256` are unfolded into the expected pipeline structure, so the proofs connect to the exact implementation shape
-- **Algebraic properties** — XOR commutativity/associativity, AND/OR commutativity
-
-What's not yet proven:
-- Full end-to-end functional correctness for all inputs via a single theorem stating `sha256 = FIPS_180_4_spec` on arbitrary messages
-- Compression-round correctness against a separately defined full reference state-transition function
-- Full padding correctness including the final 64-bit length encoding as a standalone spec theorem
-
-## Slab allocator
-
-8 size classes (32, 48, 64, 80, 112, 144, 272, 544 bytes) with per-class free lists. Freed blocks return to their class in O(1). Objects >544B fall back to bump allocation. All in `lean_rt.c`.
-
-## Roadmap
-
-- [x] Hello World — `IO.println` on bare-metal
-- [x] SHA-256 — real computation with cycle timing
-- [x] Formal verification — proofs import implementation via lake
-- [x] Slab allocator — real memory reuse
-- [ ] Nat/Int bignum support (port `mpn.cpp` to C)
-- [ ] Interrupts and basic hardware interaction
-- [ ] Real hardware (SiFive, StarFive)
-- [ ] Formally verified device drivers in Lean
-
-## Future work
-
-### Near-term (weeks)
-
-- **Verified state machine on real hardware (SiFive / StarFive RISC-V board)** — Port from QEMU to a $15 board. A Lean-proven-correct protocol parser (e.g. CAN bus message decoder for automotive) running on actual silicon.
-
-- **More crypto primitives** — ChaCha20, HMAC-SHA256, or AES. Same approach: implement in Lean, prove correct, compile to bare-metal. Compares to HACL* (F\*), Fiat-Crypto (Coq), Jasmin — but with Lean's ergonomics.
-
-### Medium-term (months)
-
-- **Bare-metal Lean RTOS microkernel** — Task switching, priority queues, timer interrupts — all in Lean with proofs about scheduling properties (no priority inversion, bounded latency). The seL4 story but in a language that's pleasant to write.
-
-- **Verified sensor fusion / flight controller** — Kalman filter with proven numerical stability bounds, running on bare-metal reading IMU data. Targets DO-178C (avionics).
-
-- **Verified bootloader** — RISC-V bootloader that loads and verifies a signed kernel image. Proof that it never executes unsigned code.
 
 ## Target
 
-RISC-V 64-bit on QEMU `virt` machine. Open ISA, excellent QEMU support. All tools provided by `nix develop`.
+RISC-V 64-bit on QEMU `virt`. Open ISA, great tooling. Everything you need is provided by `nix develop`.
 
-## Project Ideas
+## Roadmap
 
-The best fits for this repo are small, critical, self-contained components: logic-heavy code where proofs matter, runtime requirements are modest, and the "same Lean code for proof and execution" story is obvious.
-
-### Strong near-term demos
-
-| Project | Why it fits | Example properties to prove |
-|---|---|---|
-| **Verified bootloader / signed image loader** | Small trusted component at the root of trust; a natural bare-metal target | Never jumps to an unsigned image; header/hash checks are correct; entry point is within bounds |
-| **CAN or UART protocol parser** | Parser logic is proof-friendly, easy to demo, and useful on real hardware | Total on all inputs; malformed frames are rejected; no out-of-bounds access; field decoding is correct |
-| **Firmware update manifest verifier** | Real embedded use case with clear security value | Version/hash/signature checks are correct; malformed manifests are rejected |
-| **Memory-region access checker** | Small policy engine with a clean proof story | Requests outside authorized ranges are always denied; region checks are monotone and non-overlapping |
-| **More crypto primitives** | Extends the current SHA-256 work without changing the repo's model | Functional correctness against a spec; output length/invariants; known test vectors |
-| **CCSDS or telemetry packet parser** | Good "space/avionics" example without needing a full OS stack | Packet lengths and checksums are validated; no malformed packet causes unsafe reads |
-
-### Longer-term research directions
-
-These are interesting, but they need significantly more runtime, hardware, or proof machinery than the repo has today.
-
-| Project | Why it is harder |
-|---|---|
-| **RTOS microkernel** | Requires interrupts, scheduling, task switching, and a much more mature runtime/TCB story |
-| **DMA-safe driver** | Depends heavily on hardware memory semantics, ownership, cache coherence, and MMIO details |
-| **Sensor fusion / flight control** | Pulls the project toward numerical analysis and floating/fixed-point stability proofs |
-| **Constant-time crypto proofs** | Strong claim that is hard to justify through Lean-generated C, the C compiler, and real hardware timing |
-
-### Recommended first project
-
-**Verified CAN or UART protocol parser**
-
-This is the cleanest next step after SHA-256:
-- Fits current constraints: fixed-width integers, single-threaded runtime, no bignums
-- Exercises exactly the kind of logic Lean is good at: decoding, validation, invariants
-- Runs on QEMU first and then on inexpensive real hardware
-- Shows the value of the project without overreaching on hardware complexity
-
-**Concrete example**: a CAN frame validator / decoder with proofs that:
-1. Parsing terminates on every input
-2. Invalid DLC, IDs, or payload layouts are rejected
-3. No out-of-bounds array access occurs
-4. Valid frames decode to the intended typed message
-
-After that, the strongest follow-up is a **verified bootloader / signed image loader**: still small, still self-contained, but with a stronger security story.
+This README is the front page. The longer platform plan lives in [ROADMAP.md](/Users/unbalancedparen/projects/lean4-baremetal/ROADMAP.md).

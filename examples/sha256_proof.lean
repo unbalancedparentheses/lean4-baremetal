@@ -504,7 +504,120 @@ theorem and_comm_bv (x y : BitVec 32) : x &&& y = y &&& x := by bv_decide
 theorem or_comm_bv (x y : BitVec 32) : x ||| y = y ||| x := by bv_decide
 theorem add_comm_bv (a b : BitVec 32) : a + b = b + a := by bv_decide
 
-/-! ## Section 14: End-to-end composition
+/-! ## Section 14: Reference specification (FIPS 180-4 factored)
+
+    A clean, layered reference spec using the same Lean types but factored
+    to match FIPS 180-4 section numbers. Proven equal to the implementation.
+
+    Trust chain:
+      sha256 msg = spec_sha256 msg
+        spec_sha256 uses:
+          spec_pad            (§5.1.1 — factors out spec_encodeBE64)
+          spec_compress       (§6.2.2 — factors out spec_round)
+            spec_round uses bigSigma0, ch, maj (proven correct in Sections 2/5) -/
+
+-- §6.2.2 step 3: single compression round
+def spec_round (k_t w_t : UInt32) (st : HashState) : HashState :=
+  let t1 := st.h + bigSigma1 st.e + ch st.e st.f st.g + k_t + w_t
+  let t2 := bigSigma0 st.a + maj st.a st.b st.c
+  { a := t1 + t2, b := st.a, c := st.b, d := st.c,
+    e := st.d + t1, f := st.e, g := st.f, h := st.g }
+
+-- §6.2.2: iterated compression rounds
+def spec_compressRounds (w : Array UInt32) (st : HashState) (i : Nat) : HashState :=
+  if i ≥ 64 then st
+  else spec_compressRounds w (spec_round (getU32 K i) (getU32 w i) st) (i + 1)
+termination_by 64 - i
+
+-- §6.2.2: full block compression
+def spec_compress (hash : Array UInt32) (w : Array UInt32) : Array UInt32 :=
+  let init : HashState := {
+    a := getU32 hash 0, b := getU32 hash 1, c := getU32 hash 2, d := getU32 hash 3,
+    e := getU32 hash 4, f := getU32 hash 5, g := getU32 hash 6, h := getU32 hash 7
+  }
+  let st := spec_compressRounds w init 0
+  #[getU32 hash 0 + st.a, getU32 hash 1 + st.b,
+    getU32 hash 2 + st.c, getU32 hash 3 + st.d,
+    getU32 hash 4 + st.e, getU32 hash 5 + st.f,
+    getU32 hash 6 + st.g, getU32 hash 7 + st.h]
+
+-- §5.1.1: big-endian 64-bit encoding
+def spec_encodeBE64 (v : UInt64) : Array UInt8 :=
+  #[(v >>> 56).toUInt8, (v >>> 48).toUInt8, (v >>> 40).toUInt8, (v >>> 32).toUInt8,
+    (v >>> 24).toUInt8, (v >>> 16).toUInt8, (v >>> 8).toUInt8, v.toUInt8]
+
+-- §5.1.1: message padding
+def spec_pad (msg : Array UInt8) : Array UInt8 :=
+  let bitLen := msg.size.toUInt64 * 8
+  let padLen := (119 - msg.size % 64) % 64
+  appendZeros (msg.push 0x80) padLen ++ spec_encodeBE64 bitLen
+
+-- Full pipeline loop
+def spec_sha256Loop (padded : Array UInt8) (numBlocks i : Nat) (hash : Array UInt32)
+    : Array UInt32 :=
+  if i ≥ numBlocks then hash
+  else spec_sha256Loop padded numBlocks (i + 1)
+    (spec_compress hash (messageSchedule (extractBlock padded (i * 64) 0 #[])))
+termination_by numBlocks - i
+
+-- §6.2: complete SHA-256
+def spec_sha256 (msg : Array UInt8) : Array UInt32 :=
+  let padded := spec_pad msg
+  spec_sha256Loop padded (padded.size / 64) 0 H0
+
+/-! ## Section 15: Compression equivalence -/
+
+-- compressRounds inlines the same computation as spec_round
+theorem compressRounds_eq_spec (w : Array UInt32) (st : HashState) (i : Nat) (hi : i ≤ 64) :
+    compressRounds w st i = spec_compressRounds w st i := by
+  rw [compressRounds.eq_1, spec_compressRounds.eq_1]
+  if h : 64 ≤ i then
+    simp [if_pos h]
+  else
+    simp only [if_neg h]
+    dsimp only [spec_round]
+    exact compressRounds_eq_spec w _ (i + 1) (by omega)
+termination_by 64 - i
+
+-- compress = spec_compress (direct consequence)
+theorem compress_eq_spec (hash w : Array UInt32) :
+    compress hash w = spec_compress hash w := by
+  simp only [compress, spec_compress, compressRounds_eq_spec w _ 0 (by omega)]
+
+/-! ## Section 16: Padding equivalence -/
+
+-- 8 sequential pushes = appending an 8-element array
+private theorem push_chain_eq_append (arr : Array UInt8)
+    (v0 v1 v2 v3 v4 v5 v6 v7 : UInt8) :
+    ((((((((arr.push v0).push v1).push v2).push v3).push v4).push v5).push v6).push v7)
+    = arr ++ #[v0, v1, v2, v3, v4, v5, v6, v7] := by
+  simp only [← Array.toList_inj]
+  simp [Array.toList_push, Array.toList_append, List.append_assoc]
+
+-- padMsg = spec_pad (push chain = append of spec_encodeBE64)
+theorem padMsg_eq_spec (msg : Array UInt8) : padMsg msg = spec_pad msg := by
+  unfold padMsg spec_pad spec_encodeBE64
+  exact push_chain_eq_append _ _ _ _ _ _ _ _ _
+
+/-! ## Section 17: Loop equivalence and end-to-end theorem -/
+
+-- sha256Loop = spec_sha256Loop (by compress = spec_compress)
+theorem sha256Loop_eq_spec (padded : Array UInt8) (numBlocks i : Nat) (hash : Array UInt32) :
+    sha256Loop padded numBlocks i hash = spec_sha256Loop padded numBlocks i hash := by
+  rw [sha256Loop.eq_1, spec_sha256Loop.eq_1]
+  if h : numBlocks ≤ i then
+    simp [if_pos h]
+  else
+    simp only [if_neg h, compress_eq_spec]
+    exact sha256Loop_eq_spec padded numBlocks (i + 1) _
+termination_by numBlocks - i
+
+-- End-to-end: sha256 = spec_sha256
+theorem sha256_eq_spec (msg : Array UInt8) : sha256 msg = spec_sha256 msg := by
+  simp only [sha256, spec_sha256, ← padMsg_eq_spec]
+  exact sha256Loop_eq_spec _ _ _ _
+
+/-! ## Section 18: End-to-end composition
 
     This section ties every component proof into a single top-level theorem.
     If any piece breaks, this theorem fails — it serves as the completeness
@@ -524,7 +637,8 @@ theorem add_comm_bv (a b : BitVec 32) : a + b = b + a := by bv_decide
        satisfy the FIPS recurrence W[t] = σ1(W[t-2]) + W[t-7] + σ0(W[t-15]) + W[t-16]
     5. Bitwise operations: Σ0, Σ1, σ0, σ1 match FIPS 180-4 spec definitions
     6. Pipeline: sha256 = pad → loop(extract → schedule → compress) from H0
-    7. Test vectors: "abc", "", and two-block message match FIPS 180-4 appendix -/
+    7. Test vectors: "abc", "", and two-block message match FIPS 180-4 appendix
+    8. End-to-end: sha256 msg = spec_sha256 msg -/
 theorem sha256_correct (msg : Array UInt8) :
     -- 1. Output is always 8 words
     (sha256 msg).size = 8
@@ -559,7 +673,9 @@ theorem sha256_correct (msg : Array UInt8) :
     ∧ (∀ x : UInt32, bigSigma0 x = ⟨spec_bigSigma0 x.toBitVec⟩)
     ∧ (∀ x : UInt32, bigSigma1 x = ⟨spec_bigSigma1 x.toBitVec⟩)
     ∧ (∀ x : UInt32, smallSigma0 x = ⟨spec_smallSigma0 x.toBitVec⟩)
-    ∧ (∀ x : UInt32, smallSigma1 x = ⟨spec_smallSigma1 x.toBitVec⟩) := by
+    ∧ (∀ x : UInt32, smallSigma1 x = ⟨spec_smallSigma1 x.toBitVec⟩)
+    -- 14. End-to-end: implementation = reference specification
+    ∧ sha256 msg = spec_sha256 msg := by
   exact ⟨sha256_size msg,
          fun i h => padMsg_original msg i h,
          padMsg_marker msg,
@@ -571,4 +687,5 @@ theorem sha256_correct (msg : Array UInt8) :
          fun w k hw hk_lb hk_ub =>
            expandWords_recurrence w 16 (by omega) (by omega) hw k hk_lb hk_ub,
          bigSigma0_correct, bigSigma1_correct,
-         smallSigma0_correct, smallSigma1_correct⟩
+         smallSigma0_correct, smallSigma1_correct,
+         sha256_eq_spec msg⟩
