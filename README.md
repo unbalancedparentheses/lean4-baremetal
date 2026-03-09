@@ -114,44 +114,44 @@ RISC-V 64-bit on QEMU `virt` machine. Open ISA, excellent QEMU support. All tool
 
 ## Project Ideas
 
-Here are some projects that leverage the "verified + bare metal" combination:
+The best fits for this repo are small, critical, self-contained components: logic-heavy code where proofs matter, runtime requirements are modest, and the "same Lean code for proof and execution" story is obvious.
 
-### Verified Bootloader + Secure Boot Chain 🔐
-A RISC-V bootloader that loads and verifies kernel images, with proofs that it never executes unsigned code and correctly validates signatures (Ed25519). **Why**: Bootloaders are the root of trust—bugs here compromise everything above.
+### Strong near-term demos
 
-### Deterministic CAN Bus Protocol Parser 🚗
-A verified parser for automotive CAN bus messages running on real hardware (e.g., StarFive VisionFive 2). Prove the parser is total (never crashes), handles framing correctly, and has no integer overflows. **Why**: Automotive ECUs often have parser bugs that cause safety issues.
+| Project | Why it fits | Example properties to prove |
+|---|---|---|
+| **Verified bootloader / signed image loader** | Small trusted component at the root of trust; a natural bare-metal target | Never jumps to an unsigned image; header/hash checks are correct; entry point is within bounds |
+| **CAN or UART protocol parser** | Parser logic is proof-friendly, easy to demo, and useful on real hardware | Total on all inputs; malformed frames are rejected; no out-of-bounds access; field decoding is correct |
+| **Firmware update manifest verifier** | Real embedded use case with clear security value | Version/hash/signature checks are correct; malformed manifests are rejected |
+| **Memory-region access checker** | Small policy engine with a clean proof story | Requests outside authorized ranges are always denied; region checks are monotone and non-overlapping |
+| **More crypto primitives** | Extends the current SHA-256 work without changing the repo's model | Functional correctness against a spec; output length/invariants; known test vectors |
+| **CCSDS or telemetry packet parser** | Good "space/avionics" example without needing a full OS stack | Packet lengths and checksums are validated; no malformed packet causes unsafe reads |
 
-### Minimal Verified RTOS Microkernel ⏱️
-Task scheduler + priority queue with proofs of no priority inversion and bounded latency. The kernel itself is written in Lean and proven correct. **Why**: seL4 proved this is possible in C—Lean could make it more ergonomic.
+### Longer-term research directions
 
-### Constant-Time Cryptographic Primitives 🔑
-ChaCha20, AES-GCM, or HMAC-SHA256 with functional correctness proofs AND constant-time proofs (no timing side channels). **Why**: Traditional C crypto is riddled with timing attacks.
+These are interesting, but they need significantly more runtime, hardware, or proof machinery than the repo has today.
 
-### Sensor Fusion with Numerical Bounds 🛩️
-Kalman filter for IMU data on a drone controller. Proofs: numerical stability (no NaN), quaternion normalization stays valid, angle estimates stay bounded. **Why**: Flight controllers need guarantees about numerical behavior.
+| Project | Why it is harder |
+|---|---|
+| **RTOS microkernel** | Requires interrupts, scheduling, task switching, and a much more mature runtime/TCB story |
+| **DMA-safe driver** | Depends heavily on hardware memory semantics, ownership, cache coherence, and MMIO details |
+| **Sensor fusion / flight control** | Pulls the project toward numerical analysis and floating/fixed-point stability proofs |
+| **Constant-time crypto proofs** | Strong claim that is hard to justify through Lean-generated C, the C compiler, and real hardware timing |
 
-### Memory-Safe DMA Driver 🚀
-Direct Memory Access driver with proofs that transfers never overlap kernel memory, buffer bounds are respected, and no use-after-free occurs. **Why**: DMA bugs corrupt memory silently and are notoriously hard to debug.
+### Recommended first project
 
-### Verified Space Protocol Parser 🛰️
-CCSDS packet parser for spacecraft communication. Prove no packet can cause out-of-bounds access. **Why**: Spacecraft software can't be patched—verification matters.
+**Verified CAN or UART protocol parser**
 
----
+This is the cleanest next step after SHA-256:
+- Fits current constraints: fixed-width integers, single-threaded runtime, no bignums
+- Exercises exactly the kind of logic Lean is good at: decoding, validation, invariants
+- Runs on QEMU first and then on inexpensive real hardware
+- Shows the value of the project without overreaching on hardware complexity
 
-### 🌟 Recommended First Project
+**Concrete example**: a CAN frame validator / decoder with proofs that:
+1. Parsing terminates on every input
+2. Invalid DLC, IDs, or payload layouts are rejected
+3. No out-of-bounds array access occurs
+4. Valid frames decode to the intended typed message
 
-**Verified Protocol Parser for a Hardware Bus (I2C/SPI/CAN)**
-
-**Why this first:**
-- Fits current constraints (no bignums needed, single-threaded is fine)
-- Can run on real $15 hardware (StarFive VisionFive 2)
-- Solves a real, common problem (parser bugs are frequent in embedded)
-- Clear success criteria: parse correctly + proofs of totality + no overflows
-- Good showcase for the "same code for proof and runtime" approach
-
-**Example target**: Parse MPU-6050/9250 IMU data over I2C with proofs that:
-1. Parser terminates on any input (totality)
-2. No out-of-bounds array access
-3. Checksum validation is correct
-4. Sensor values are within physically possible ranges
+After that, the strongest follow-up is a **verified bootloader / signed image loader**: still small, still self-contained, but with a stronger security story.

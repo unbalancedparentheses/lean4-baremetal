@@ -195,7 +195,307 @@ theorem compressRounds_done (w : Array UInt32) (st : HashState) :
 --   (a,b,c,d,e,f,g,h) ← (T1+T2, a, b, c, d+T1, e, f, g)
 -- The bitwise operations (Σ0, Σ1, Ch, Maj) are proven correct in Section 2.
 
-/-! ## Section 5: Structural properties of the bitwise algebra -/
+/-! ## Section 5: Sigma composition proofs (UInt32 level)
+
+    Each composed sigma function matches the FIPS 180-4 spec definition.
+    bv_decide's intToBitVec preprocessing handles UInt32→BitVec automatically. -/
+
+theorem bigSigma0_correct (x : UInt32) :
+    bigSigma0 x = ⟨spec_bigSigma0 x.toBitVec⟩ := by
+  unfold bigSigma0 rotr spec_bigSigma0 spec_rotr; cases x; congr 1
+
+theorem bigSigma1_correct (x : UInt32) :
+    bigSigma1 x = ⟨spec_bigSigma1 x.toBitVec⟩ := by
+  unfold bigSigma1 rotr spec_bigSigma1 spec_rotr; cases x; congr 1
+
+theorem smallSigma0_correct (x : UInt32) :
+    smallSigma0 x = ⟨spec_smallSigma0 x.toBitVec⟩ := by
+  unfold smallSigma0 rotr spec_smallSigma0 spec_rotr; cases x; congr 1
+
+theorem smallSigma1_correct (x : UInt32) :
+    smallSigma1 x = ⟨spec_smallSigma1 x.toBitVec⟩ := by
+  unfold smallSigma1 rotr spec_smallSigma1 spec_rotr; cases x; congr 1
+
+/-! ## Section 6: Helper lemmas (getU32/getU8/appendZeros content) -/
+
+-- getU32 bridges getD to getElem
+theorem getU32_eq (xs : Array UInt32) (i : Nat) (h : i < xs.size) :
+    getU32 xs i = xs[i] := by
+  unfold getU32 Array.getD; split
+  · rfl
+  · contradiction
+
+theorem getU32_default (xs : Array UInt32) (i : Nat) (h : ¬(i < xs.size)) :
+    getU32 xs i = 0 := by
+  unfold getU32 Array.getD; split
+  · contradiction
+  · rfl
+
+theorem getU32_push_lt (xs : Array UInt32) (v : UInt32) (i : Nat) (h : i < xs.size) :
+    getU32 (xs.push v) i = getU32 xs i := by
+  rw [getU32_eq (xs.push v) i (by rw [Array.size_push]; omega),
+      getU32_eq xs i h, Array.getElem_push_lt]
+
+theorem getU32_push_eq (xs : Array UInt32) (v : UInt32) :
+    getU32 (xs.push v) xs.size = v := by
+  rw [getU32_eq (xs.push v) xs.size (by rw [Array.size_push]; omega)]
+  exact Array.getElem_push_eq
+
+-- getU8 bridges getD to getElem
+theorem getU8_eq (xs : Array UInt8) (i : Nat) (h : i < xs.size) :
+    getU8 xs i = xs[i] := by
+  unfold getU8 Array.getD; split
+  · rfl
+  · contradiction
+
+theorem getU8_default (xs : Array UInt8) (i : Nat) (h : ¬(i < xs.size)) :
+    getU8 xs i = 0 := by
+  unfold getU8 Array.getD; split
+  · contradiction
+  · rfl
+
+theorem getU8_push_lt (xs : Array UInt8) (v : UInt8) (i : Nat) (h : i < xs.size) :
+    getU8 (xs.push v) i = getU8 xs i := by
+  rw [getU8_eq (xs.push v) i (by rw [Array.size_push]; omega),
+      getU8_eq xs i h, Array.getElem_push_lt]
+
+theorem getU8_push_eq (xs : Array UInt8) (v : UInt8) :
+    getU8 (xs.push v) xs.size = v := by
+  rw [getU8_eq (xs.push v) xs.size (by rw [Array.size_push]; omega)]
+  exact Array.getElem_push_eq
+
+-- appendZeros content: existing bytes preserved, new bytes are zero
+theorem appendZeros_get_old (p : Array UInt8) (n i : Nat) (h : i < p.size) :
+    getU8 (appendZeros p n) i = p[i] := by
+  induction n generalizing p with
+  | zero => simp [appendZeros, getU8_eq _ _ h]
+  | succ n ih =>
+    simp only [appendZeros]
+    rw [ih (p.push 0x00) (by rw [Array.size_push]; omega)]
+    exact Array.getElem_push_lt h
+
+theorem appendZeros_get_new (p : Array UInt8) (n : Nat) (k : Nat) (hk : k < n) :
+    getU8 (appendZeros p n) (p.size + k) = 0 := by
+  induction n generalizing p k with
+  | zero => omega
+  | succ n ih =>
+    simp only [appendZeros]
+    cases k with
+    | zero =>
+      simp only [Nat.add_zero]
+      rw [appendZeros_get_old (p.push 0x00) n p.size (by rw [Array.size_push]; omega)]
+      exact Array.getElem_push_eq
+    | succ k' =>
+      have : p.size + (k' + 1) = (p.push 0x00).size + k' := by
+        rw [Array.size_push]; omega
+      rw [this]
+      exact ih (p.push 0x00) k' (by omega)
+
+/-! ## Section 7: extractBlock content proof -/
+
+-- Generalized: extractBlock starting from position j with accumulator acc
+theorem extractBlock_content_gen (padded : Array UInt8) (off j : Nat) (acc : Array UInt8)
+    (hj : j ≤ 64) (k : Nat) (hk : k < acc.size + (64 - j)) :
+    getU8 (extractBlock padded off j acc) k =
+    if h : k < acc.size then acc[k]
+    else getU8 padded (off + (k - acc.size + j)) := by
+  unfold extractBlock
+  split
+  case isTrue hge =>
+    -- j ≥ 64, so j = 64 and 64 - j = 0, acc unchanged
+    have hj64 : j = 64 := by omega
+    subst hj64
+    simp at hk
+    rw [getU8_eq acc k hk]; simp [hk]
+  case isFalse hlt =>
+    -- hlt : ¬(... ≥ ...), omega can use this directly
+    -- j < 64, recurse with acc.push (getU8 padded (off + j))
+    have hj' : j + 1 ≤ 64 := by omega
+    have hk' : k < (acc.push (getU8 padded (off + j))).size + (64 - (j + 1)) := by
+      rw [Array.size_push]; omega
+    rw [extractBlock_content_gen padded off (j + 1) (acc.push (getU8 padded (off + j))) hj' k hk']
+    split
+    case isTrue h' =>
+      -- k < (acc.push _).size means k < acc.size + 1
+      rw [Array.size_push] at h'
+      split
+      case isTrue h => exact Array.getElem_push_lt h
+      case isFalse h =>
+        have hk_eq : k = acc.size := by omega
+        subst hk_eq
+        simp [Array.getElem_push_eq]
+    case isFalse h' =>
+      rw [Array.size_push] at h'
+      split
+      case isTrue h => omega
+      case isFalse h =>
+        congr 1; simp [Array.size_push]; omega
+termination_by 64 - j
+
+-- extractBlock starting from j=0 with empty acc: output[k] = padded[off+k]
+theorem extractBlock_content (padded : Array UInt8) (off : Nat) (k : Nat) (hk : k < 64) :
+    getU8 (extractBlock padded off 0 #[]) k = getU8 padded (off + k) := by
+  have := extractBlock_content_gen padded off 0 #[] (by omega) k (by simp; omega)
+  simp at this; exact this
+
+/-! ## Section 8: parseWords content proof -/
+
+-- parseWords preserves existing accumulator elements
+theorem parseWords_preserves_acc (block : Array UInt8) (i : Nat) (acc : Array UInt32)
+    (hi : i ≤ 16) (k : Nat) (hk : k < acc.size) :
+    getU32 (parseWords block i acc) k = getU32 acc k := by
+  unfold parseWords; split
+  case isTrue => rfl
+  case isFalse hlt =>
+    dsimp only
+    rw [parseWords_preserves_acc block (i + 1) _ (by omega) k
+        (by rw [Array.size_push]; omega)]
+    exact getU32_push_lt acc _ k hk
+termination_by 16 - i
+
+-- parseWords: new word at position k = big-endian decode of 4 bytes at position k
+-- Proved with invariant acc.size = i
+theorem parseWords_at_inv (block : Array UInt8) (i : Nat) (acc : Array UInt32)
+    (hi : i ≤ 16) (hw : acc.size = i) (k : Nat) (hk_lb : i ≤ k) (hk_ub : k < 16) :
+    getU32 (parseWords block i acc) k =
+    (getU8 block (k * 4)).toUInt32 <<< 24 |||
+    (getU8 block (k * 4 + 1)).toUInt32 <<< 16 |||
+    (getU8 block (k * 4 + 2)).toUInt32 <<< 8 |||
+    (getU8 block (k * 4 + 3)).toUInt32 := by
+  unfold parseWords; split
+  case isTrue hge => omega
+  case isFalse hlt =>
+    dsimp only
+    by_cases hki : k = i
+    · -- k = i: this is the word being pushed at this step
+      rw [hki]
+      rw [parseWords_preserves_acc block (i + 1) _ (by omega) i
+          (by rw [Array.size_push]; omega)]
+      -- Goal: getU32 (acc.push V) i = V
+      -- rw [← hw] converts i to acc.size (no dependent type issue since getU32 uses getD)
+      rw [← hw, getU32_push_eq]
+    · -- k > i: recurse
+      exact parseWords_at_inv block (i + 1) _ (by omega)
+          (by rw [Array.size_push, hw]) k (by omega) hk_ub
+termination_by 16 - i
+
+-- parseWords: word k = big-endian decode of 4 bytes
+theorem parseWords_content (block : Array UInt8) (k : Nat) (hk : k < 16) :
+    getU32 (parseWords block 0 #[]) k =
+    (getU8 block (k * 4)).toUInt32 <<< 24 |||
+    (getU8 block (k * 4 + 1)).toUInt32 <<< 16 |||
+    (getU8 block (k * 4 + 2)).toUInt32 <<< 8 |||
+    (getU8 block (k * 4 + 3)).toUInt32 := by
+  exact parseWords_at_inv block 0 #[] (by omega) rfl k (by omega) hk
+
+/-! ## Section 9: K constants and compress structure -/
+
+theorem K_size : K.size = 64 := by native_decide
+
+theorem compress_eq (hash w : Array UInt32) :
+    compress hash w =
+    let init : HashState := {
+      a := getU32 hash 0, b := getU32 hash 1, c := getU32 hash 2, d := getU32 hash 3,
+      e := getU32 hash 4, f := getU32 hash 5, g := getU32 hash 6, h := getU32 hash 7
+    }
+    let st := compressRounds w init 0
+    #[getU32 hash 0 + st.a, getU32 hash 1 + st.b,
+      getU32 hash 2 + st.c, getU32 hash 3 + st.d,
+      getU32 hash 4 + st.e, getU32 hash 5 + st.f,
+      getU32 hash 6 + st.g, getU32 hash 7 + st.h] := by
+  unfold compress; rfl
+
+/-! ## Section 10: expandWords content proofs -/
+
+-- Clean equation for expandWords (inlines let bindings from eq_1)
+private theorem expandWords_eq (w : Array UInt32) (i : Nat) :
+    expandWords w i = if i ≥ 64 then w
+    else expandWords
+      (w.push (getU32 w (i - 16) + smallSigma0 (getU32 w (i - 15)) +
+               getU32 w (i - 7) + smallSigma1 (getU32 w (i - 2))))
+      (i + 1) := by
+  rw [expandWords.eq_1]
+
+-- expandWords preserves existing elements
+theorem expandWords_preserves (w : Array UInt32) (i : Nat) (hi : i ≤ 64) (hw : w.size = i)
+    (k : Nat) (hk : k < i) :
+    getU32 (expandWords w i) k = getU32 w k := by
+  rw [expandWords_eq]
+  split
+  · rfl
+  · next hge =>
+    rw [expandWords_preserves (w.push _) (i + 1) (by omega) (by rw [Array.size_push, hw]) k (by omega)]
+    exact getU32_push_lt w _ k (hw ▸ hk)
+  termination_by 64 - i
+
+-- expandWords: the word at index i matches the FIPS recurrence
+-- Stated in implementation order: w[i-16] + σ0(w[i-15]) + w[i-7] + σ1(w[i-2])
+theorem expandWords_recurrence (w : Array UInt32) (i : Nat) (hi : 16 ≤ i) (hi2 : i ≤ 64)
+    (hw : w.size = i) (k : Nat) (hk : i ≤ k) (hk2 : k < 64) :
+    getU32 (expandWords w i) k =
+    getU32 (expandWords w i) (k - 16) +
+    smallSigma0 (getU32 (expandWords w i) (k - 15)) +
+    getU32 (expandWords w i) (k - 7) +
+    smallSigma1 (getU32 (expandWords w i) (k - 2)) := by
+  have hstep := expandWords_eq w i
+  simp only [show ¬(i ≥ 64) from by omega, ite_false] at hstep
+  -- hstep : expandWords w i = expandWords (w.push val) (i+1)
+  rw [hstep]
+  by_cases hki : k = i
+  · -- k = i: this is the word being computed in this step
+    rw [hki]
+    -- RHS: lookups at i-2, i-7, i-15, i-16 are all < i — rewrite FIRST
+    let val := getU32 w (i - 16) + smallSigma0 (getU32 w (i - 15)) +
+               getU32 w (i - 7) + smallSigma1 (getU32 w (i - 2))
+    have hlook : ∀ j, j < i →
+        getU32 (expandWords (w.push val) (i + 1)) j = getU32 w j := by
+      intro j hj
+      rw [expandWords_preserves (w.push val) (i + 1) (by omega) (by rw [Array.size_push, hw]) j (by omega)]
+      exact getU32_push_lt w _ j (hw ▸ hj)
+    rw [hlook (i - 16) (by omega), hlook (i - 15) (by omega),
+        hlook (i - 7) (by omega), hlook (i - 2) (by omega)]
+    -- LHS: word at index i = the pushed value
+    rw [expandWords_preserves _ (i + 1) (by omega) (by rw [Array.size_push, hw]) i (by omega)]
+    rw [← hw, getU32_push_eq]
+  · -- k > i: recurse
+    exact expandWords_recurrence _ (i + 1) (by omega) (by omega)
+      (by rw [Array.size_push, hw]) k (by omega) hk2
+  termination_by 64 - i
+
+/-! ## Section 11: padMsg content proofs -/
+
+-- Region 1: original message bytes preserved
+theorem padMsg_original (msg : Array UInt8) (i : Nat) (h : i < msg.size) :
+    getU8 (padMsg msg) i = msg[i] := by
+  unfold padMsg; simp only []
+  iterate 8 rw [getU8_push_lt _ _ _ (by simp [Array.size_push, appendZeros_size]; omega)]
+  rw [appendZeros_get_old (msg.push 0x80) _ i (by rw [Array.size_push]; omega)]
+  exact Array.getElem_push_lt h
+
+-- Region 2: 0x80 marker byte
+theorem padMsg_marker (msg : Array UInt8) :
+    getU8 (padMsg msg) msg.size = 0x80 := by
+  unfold padMsg; simp only []
+  iterate 8 rw [getU8_push_lt _ _ _ (by simp [Array.size_push, appendZeros_size]; omega)]
+  rw [appendZeros_get_old (msg.push 0x80) _ msg.size (by rw [Array.size_push]; omega)]
+  exact Array.getElem_push_eq
+
+/-! ## Section 12: Composition (sha256Loop step) -/
+
+-- sha256Loop unfolding lemma
+theorem sha256Loop_step (padded : Array UInt8) (numBlocks i : Nat) (hash : Array UInt32)
+    (hi : i < numBlocks) :
+    sha256Loop padded numBlocks i hash =
+    sha256Loop padded numBlocks (i + 1)
+      (compress hash (messageSchedule (extractBlock padded (i * 64) 0 #[]))) := by
+  rw [sha256Loop.eq_1]; simp [show ¬(numBlocks ≤ i) from by omega]
+
+-- sha256 is pad + loop starting from H0
+theorem sha256_unfold (msg : Array UInt8) :
+    sha256 msg = sha256Loop (padMsg msg) ((padMsg msg).size / 64) 0 H0 := by
+  unfold sha256; rfl
+
+/-! ## Section 13: Structural properties of the bitwise algebra -/
 
 theorem xor_self_zero (x : BitVec 32) : x ^^^ x = 0 := by bv_decide
 theorem xor_comm (x y : BitVec 32) : x ^^^ y = y ^^^ x := by bv_decide
