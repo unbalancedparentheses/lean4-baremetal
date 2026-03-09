@@ -3,14 +3,14 @@
  *
  * The Lean compiler generates C code with `#include <lean/lean.h>`.
  * This file redirects to our freestanding runtime replacement.
- * The Makefile adds `-I.` so this file is found instead of the real lean.h.
+ * The Makefile adds `-Iruntime` so this file is found instead of the real lean.h.
  */
 
 #ifndef LEAN_LEAN_H
 #define LEAN_LEAN_H
 
 #include <stdbool.h>
-#include "../lean_rt.h"
+#include "lean_rt.h"
 
 /* ---- Object tag accessor ---- */
 

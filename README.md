@@ -130,12 +130,16 @@ Remaining issues:
 ## Files
 
 ```
-boot.S                RISC-V entry point (disable interrupts, zero BSS, set stack)
-linker.ld             Memory layout at 0x80000000 (QEMU virt machine)
-lean_rt.c/h           Freestanding Lean runtime (slab allocator, refcounting, strings, arrays)
-uart.c/h              NS16550A UART driver
-libc_min.c            Minimal libc stubs
-main.c                C entry: init UART, init Lean runtime, call Lean main
+platform/
+  boot.S              RISC-V entry point (disable interrupts, zero BSS, set stack)
+  linker.ld           Memory layout at 0x80000000 (QEMU virt machine)
+  board.c/h           Board-specific config (UART base, early init, halt)
+  uart.c/h            NS16550A UART driver
+runtime/
+  lean_rt.c/h         Freestanding Lean runtime (slab allocator, refcounting, strings, arrays)
+  libc_min.c          Minimal libc stubs
+  main.c              C entry: init UART, init Lean runtime, call Lean main
+  lean/lean.h         Shim header replacing <lean/lean.h> for freestanding builds
 lakefile.lean         Lake build config (proof file imports implementation)
 flake.nix             Nix flake for reproducible builds
 examples/

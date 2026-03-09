@@ -22,10 +22,10 @@ CROSS_CC  := $(shell command -v riscv64-unknown-linux-gnu-gcc 2>/dev/null || \
 CFLAGS    := -ffreestanding -nostdlib -nostartfiles \
              -mcmodel=medany -march=rv64imac_zicsr -mabi=lp64 \
              -O2 -Wall -Wextra -Wno-unused-parameter \
-             -I. \
+             -Iruntime -Iplatform \
              -fno-stack-protector \
              -DLEAN_FREESTANDING=1
-LDFLAGS   := -T linker.ld -nostdlib -static
+LDFLAGS   := -T platform/linker.ld -nostdlib -static
 QEMUFLAGS := -machine virt -bios none -nographic -serial mon:stdio
 TEST_TIMEOUT ?= 10
 
@@ -39,13 +39,14 @@ EXAMPLE   ?= hello
 LEAN_SRC  := examples/$(EXAMPLE).lean
 LEAN_C    := $(BUILDDIR)/$(EXAMPLE).c
 
-ASM_SRC   := boot.S
-C_SRCS    := lean_rt.c uart.c libc_min.c
-C_SRCS    += board.c
+ASM_SRC   := platform/boot.S
+C_SRCS    := runtime/lean_rt.c platform/uart.c runtime/libc_min.c
+C_SRCS    += platform/board.c
 
 # Object files
 ASM_OBJ   := $(BUILDDIR)/boot.o
-C_OBJS    := $(patsubst %.c,$(BUILDDIR)/%.o,$(C_SRCS))
+C_OBJS    := $(BUILDDIR)/lean_rt.o $(BUILDDIR)/uart.o $(BUILDDIR)/libc_min.o \
+             $(BUILDDIR)/board.o
 LEAN_OBJ  := $(BUILDDIR)/$(EXAMPLE)_lean.o
 
 ALL_OBJS  := $(ASM_OBJ) $(C_OBJS) $(LEAN_OBJ)
@@ -91,13 +92,17 @@ $(ASM_OBJ): $(ASM_SRC) | $(BUILDDIR)
 	@echo "  AS      $<"
 	$(CROSS_CC) $(CFLAGS) -c $< -o $@
 
-# Compile C sources
-$(BUILDDIR)/%.o: %.c lean_rt.h uart.h | $(BUILDDIR)
+# Compile C sources (explicit rules per source directory)
+$(BUILDDIR)/%.o: runtime/%.c | $(BUILDDIR)
+	@echo "  CC      $<"
+	$(CROSS_CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/%.o: platform/%.c | $(BUILDDIR)
 	@echo "  CC      $<"
 	$(CROSS_CC) $(CFLAGS) -c $< -o $@
 
 # Compile Lean-generated C
-$(LEAN_OBJ): $(LEAN_C) lean_rt.h | $(BUILDDIR)
+$(LEAN_OBJ): $(LEAN_C) runtime/lean_rt.h | $(BUILDDIR)
 	@echo "  CC      $< (lean-generated)"
 	$(CROSS_CC) $(CFLAGS) -Wno-unused-function -Wno-missing-field-initializers -c $< -o $@
 
