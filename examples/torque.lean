@@ -29,13 +29,13 @@ structure DriveInputs where
   battery_ok     : Bool
   estop_clear    : Bool
   enable_request : Bool
-  deriving Inhabited, DecidableEq, Repr
+  deriving Inhabited
 
 -- Persistent state across CAN cycles
 structure DriveState where
   faulted       : Bool   -- latched fault flag
   drive_enabled : Bool   -- drive currently authorized
-  deriving Inhabited, DecidableEq, Repr
+  deriving Inhabited
 
 -- Reason codes for torque denial
 inductive ReasonCode where
@@ -47,13 +47,13 @@ inductive ReasonCode where
   | batteryFault : ReasonCode   -- battery fault
   | estopActive  : ReasonCode   -- emergency stop active
   | faultLatched : ReasonCode   -- previous fault still latched
-  deriving Inhabited, DecidableEq, Repr
+  deriving Inhabited
 
 structure DriveOutput where
   torque_allowed : Bool
   drive_enabled  : Bool
   reason         : ReasonCode
-  deriving Inhabited, DecidableEq, Repr
+  deriving Inhabited
 
 /-! ## Core logic -/
 

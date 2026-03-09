@@ -6,6 +6,13 @@
 import torque
 import Std.Tactic.BVDecide
 
+-- DecidableEq is needed for native_decide on equality tests,
+-- but we keep it out of torque.lean to avoid pulling library code into the binary.
+deriving instance DecidableEq for ReasonCode
+deriving instance DecidableEq for DriveInputs
+deriving instance DecidableEq for DriveState
+deriving instance DecidableEq for DriveOutput
+
 /-! ## Section 1: Safety predicate properties -/
 
 theorem safetyOk_all_true :

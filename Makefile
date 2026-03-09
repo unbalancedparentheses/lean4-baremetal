@@ -35,8 +35,11 @@ BUILDDIR  := build
 # Example selection (override with: make EXAMPLE=sha256)
 EXAMPLE   ?= hello
 
-# Examples that import project modules and need lake for LEAN_PATH
+# Examples that import project modules and need lake for LEAN_PATH.
+# Each such example lists its Lean module dependencies below.
 LAKE_EXAMPLES := can torque
+LEAN_DEPS_can     := can_lib
+LEAN_DEPS_torque  := can_lib
 
 # Sources
 LEAN_SRC  := examples/$(EXAMPLE).lean
@@ -52,12 +55,15 @@ C_OBJS    := $(BUILDDIR)/lean_rt.o $(BUILDDIR)/uart.o $(BUILDDIR)/libc_min.o \
              $(BUILDDIR)/board.o
 LEAN_OBJ  := $(BUILDDIR)/$(EXAMPLE)_lean.o
 
-ALL_OBJS  := $(ASM_OBJ) $(C_OBJS) $(LEAN_OBJ)
+# Dependency objects (empty for standalone examples, populated for lake examples)
+LEAN_DEP_OBJS := $(patsubst %,$(BUILDDIR)/%_lean.o,$(LEAN_DEPS_$(EXAMPLE)))
+
+ALL_OBJS  := $(ASM_OBJ) $(C_OBJS) $(LEAN_OBJ) $(LEAN_DEP_OBJS)
 
 # Output (example-specific to avoid stale cross-example artifacts)
 KERNEL    := $(BUILDDIR)/$(EXAMPLE).elf
 
-.PHONY: all clean run lean-c objdump verify test help lake-deps \
+.PHONY: all clean run lean-c objdump verify test help \
 	        nix-build nix-run nix-clean nix-verify nix-test
 
 # ---- Nix wrappers (run everything inside nix develop) ----
@@ -83,23 +89,26 @@ nix-test:
 
 all: $(KERNEL)
 
-# Build lake library dependencies (for examples that import project modules).
-# Fast no-op when already built.
-lake-deps:
-	@lake build can_lib >/dev/null 2>&1
-
-# Compile Lean to C.  Examples that import project modules (can, torque)
-# need lake's LEAN_PATH so the compiler can find .olean files.
+# Compile Lean to C.
+# - Standalone examples: plain `lean -c`
+# - Lake examples (import project modules): `lake build` generates C for all
+#   modules, then copy to build/.
 lean-c: $(LEAN_C)
 
 $(LEAN_C): $(LEAN_SRC) | $(BUILDDIR)
 	@echo "  LEAN    $< -> $@"
 	@if echo "$(LAKE_EXAMPLES)" | grep -qw "$(EXAMPLE)"; then \
-		$(MAKE) --no-print-directory lake-deps; \
-		lake env $(LEAN) $< -c $@; \
+		lake build $(EXAMPLE) >/dev/null 2>&1; \
+		cp .lake/build/ir/$(EXAMPLE).c $@; \
+		for dep in $(LEAN_DEPS_$(EXAMPLE)); do \
+			cp .lake/build/ir/$$dep.c $(BUILDDIR)/$$dep.c; \
+		done; \
 	else \
 		$(LEAN) $< -c $@; \
 	fi
+
+# Dependency C files are generated as a side effect of the main lean-c step
+$(foreach dep,$(LEAN_DEPS_$(EXAMPLE)),$(eval $(BUILDDIR)/$(dep).c: $(LEAN_C)))
 
 # Compile assembly
 $(ASM_OBJ): $(ASM_SRC) | $(BUILDDIR)
@@ -115,8 +124,8 @@ $(BUILDDIR)/%.o: platform/%.c | $(BUILDDIR)
 	@echo "  CC      $<"
 	$(CROSS_CC) $(CFLAGS) -c $< -o $@
 
-# Compile Lean-generated C
-$(LEAN_OBJ): $(LEAN_C) runtime/lean_rt.h | $(BUILDDIR)
+# Compile Lean-generated C (main example + any dependencies)
+$(BUILDDIR)/%_lean.o: $(BUILDDIR)/%.c runtime/lean_rt.h | $(BUILDDIR)
 	@echo "  CC      $< (lean-generated)"
 	$(CROSS_CC) $(CFLAGS) -Wno-unused-function -Wno-missing-field-initializers -c $< -o $@
 
